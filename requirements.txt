@@ -1,0 +1,12 @@
+streamlit==1.54.0
+pandas==2.3.3
+numpy==2.4.2
+matplotlib==3.10.8
+statsmodels==0.14.6
+scipy==1.17.0
+openai==2.2.0
+querychat[streamlit]==0.5.1
+duckdb==1.4.4
+palettable==3.3.3
+pydantic==2.12.5
+python-dotenv==1.1.0
