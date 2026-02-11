@@ -26,3 +26,7 @@ interpretation.
 
 All data processing happens in-memory. No data is persisted to disk.
 Only chart PNG images (never raw data) are sent to the AI when you click "Interpret."
+
+## Acknowledgments
+
+This app was vibe-coded with [Claude Code](https://docs.anthropic.com/en/docs/claude-code).

@@ -260,7 +260,10 @@ with st.sidebar:
             st.session_state._upload_id = file_id
         st.caption(f"Detected delimiter: `{repr(st.session_state._upload_delim)}`")
     elif demo_choice != "(none)":
-        st.session_state.raw_df = _load_demo(_DEMO_FILES[demo_choice])
+        demo_key = ("demo", demo_choice)
+        if st.session_state.get("_upload_id") != demo_key:
+            st.session_state.raw_df = _load_demo(_DEMO_FILES[demo_choice])
+            st.session_state._upload_id = demo_key
     # else: keep whatever was already in session state
 
     raw_df: pd.DataFrame | None = st.session_state.raw_df
@@ -451,7 +454,7 @@ with tab_single:
         n_colors = max(12, len(y_cols))
         palette_colors = get_palette_colors(palette_name, n_colors)
         swatch_fig = render_palette_preview(palette_colors[:8])
-        st.pyplot(swatch_fig)
+        st.pyplot(swatch_fig, use_container_width=True)
 
         # Color-by control (for colored markers chart)
         color_by = None
@@ -589,7 +592,7 @@ with tab_single:
             st.error(f"Chart error: {exc}")
 
         if fig is not None:
-            st.pyplot(fig)
+            st.pyplot(fig, use_container_width=True)
 
     # ---- Summary stats expander -------------------------------------------
     with st.expander("Summary Statistics", expanded=False):
@@ -658,7 +661,7 @@ with tab_few:
                     style_dict=style_dict,
                     palette_colors=palette_b,
                 )
-                st.pyplot(fig_panel)
+                st.pyplot(fig_panel, use_container_width=True)
             except Exception as exc:
                 st.error(f"Panel chart error: {exc}")
 
@@ -676,7 +679,7 @@ with tab_few:
                         "trend_slope": "{:,.4f}",
                         "adf_pvalue": "{:.4f}",
                     }),
-                    width="stretch",
+                    use_container_width=True,
                 )
 
 # ===================================================================
@@ -726,6 +729,6 @@ with tab_many:
                     style_dict=style_dict,
                     palette_colors=palette_c,
                 )
-                st.pyplot(fig_spag)
+                st.pyplot(fig_spag, use_container_width=True)
             except Exception as exc:
                 st.error(f"Spaghetti chart error: {exc}")
