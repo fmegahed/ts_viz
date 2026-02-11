@@ -72,9 +72,8 @@ def apply_miami_theme() -> None:
             box-shadow: none;
         }}
 
-        /* ---- Card borders ---- */
-        div[data-testid="stExpander"],
-        div[data-testid="stHorizontalBlock"] > div {{
+        /* ---- Expander card borders ---- */
+        div[data-testid="stExpander"] {{
             border: 1px solid {_BORDER_GRAY};
             border-radius: 8px;
             padding: 0.75rem;

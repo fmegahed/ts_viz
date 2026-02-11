@@ -1,0 +1,35 @@
+name: Keep HF Space Alive
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # Daily at 05:00 UTC
+  workflow_dispatch:       # Allow manual trigger
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate heartbeat CSV
+        run: |
+          APP_LIVE_DATE="2026-02-11"
+          TODAY=$(date -u +%Y-%m-%d)
+          DAYS=$(( ( $(date -u -d "$TODAY" +%s) - $(date -u -d "$APP_LIVE_DATE" +%s) ) / 86400 ))
+          echo "date,days_since_app_went_live" > heartbeat.csv
+          echo "${TODAY},${DAYS}" >> heartbeat.csv
+          cat heartbeat.csv
+
+      - name: Commit and push to GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add heartbeat.csv
+          git diff --staged --quiet || git commit -m "Daily heartbeat: $(date -u +%Y-%m-%d)"
+          git push
+
+      - name: Sync to HF Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git push "https://fmegahed:${HF_TOKEN}@huggingface.co/spaces/fmegahed/timeseries_visualization" master:main --force

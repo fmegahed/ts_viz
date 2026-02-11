@@ -109,6 +109,29 @@ def _load_demo(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+@st.cache_data(show_spinner=False)
+def _clean_pipeline(_raw_hash, raw_df, date_col, y_cols, dup_action, missing_action):
+    cleaned, report = clean_dataframe(raw_df, date_col, list(y_cols),
+                                       dup_action=dup_action,
+                                       missing_action=missing_action)
+    freq = detect_frequency(cleaned, date_col)
+    cleaned = add_time_features(cleaned, date_col)
+    return cleaned, report, freq
+
+
+@st.fragment
+def _querychat_fragment(cleaned_df, date_col, y_cols, freq_label):
+    current_hash = _df_hash(cleaned_df) + str(y_cols)
+    if st.session_state.qc_hash != current_hash:
+        st.session_state.qc = create_querychat(
+            cleaned_df, name="uploaded_data",
+            date_col=date_col, y_cols=y_cols,
+            freq_label=freq_label,
+        )
+        st.session_state.qc_hash = current_hash
+    st.session_state.qc.ui()
+
+
 def _render_cleaning_report(report: CleaningReport) -> None:
     """Show a data-quality card."""
     c1, c2, c3 = st.columns(3)
@@ -194,6 +217,7 @@ style_dict = get_miami_mpl_style()
 for key in [
     "raw_df", "cleaned_df", "cleaning_report", "freq_info",
     "date_col", "y_cols", "qc", "qc_hash",
+    "_upload_id", "_upload_delim", "cleaned_df_hash",
 ]:
     if key not in st.session_state:
         st.session_state[key] = None
@@ -218,18 +242,23 @@ with st.sidebar:
     st.divider()
     st.header("Data Input")
 
-    uploaded = st.file_uploader("Upload a CSV file", type=["csv", "tsv", "txt"])
+    uploaded = st.file_uploader("Upload a CSV file", type=["csv", "tsv", "txt"], key="csv_upload")
 
     demo_choice = st.selectbox(
         "Or load a demo dataset",
         ["(none)"] + list(_DEMO_FILES.keys()),
+        key="demo_select",
     )
 
     # Load data
     if uploaded is not None:
-        df_raw, delim = read_csv_upload(uploaded)
-        st.caption(f"Detected delimiter: `{repr(delim)}`")
-        st.session_state.raw_df = df_raw
+        file_id = (uploaded.name, uploaded.size)
+        if st.session_state.get("_upload_id") != file_id:
+            df_raw, delim = read_csv_upload(uploaded)
+            st.session_state.raw_df = df_raw
+            st.session_state._upload_delim = delim
+            st.session_state._upload_id = file_id
+        st.caption(f"Detected delimiter: `{repr(st.session_state._upload_delim)}`")
     elif demo_choice != "(none)":
         st.session_state.raw_df = _load_demo(_DEMO_FILES[demo_choice])
     # else: keep whatever was already in session state
@@ -247,7 +276,7 @@ with st.sidebar:
         all_cols = list(raw_df.columns)
         default_date_idx = all_cols.index(date_suggestions[0]) if date_suggestions else 0
 
-        date_col = st.selectbox("Date column", all_cols, index=default_date_idx)
+        date_col = st.selectbox("Date column", all_cols, index=default_date_idx, key="sidebar_date_col")
 
         remaining = [c for c in all_cols if c != date_col]
         default_y = [c for c in numeric_suggestions if c != date_col]
@@ -255,6 +284,7 @@ with st.sidebar:
             "Value column(s)",
             remaining,
             default=default_y[:4] if default_y else [],
+            key="sidebar_y_cols",
         )
 
         st.session_state.date_col = date_col
@@ -265,22 +295,20 @@ with st.sidebar:
         dup_action = st.selectbox(
             "Duplicate dates",
             ["keep_last", "keep_first", "drop_all"],
+            key="sidebar_dup_action",
         )
         missing_action = st.selectbox(
             "Missing values",
             ["interpolate", "ffill", "drop"],
+            key="sidebar_missing_action",
         )
 
         # Clean
         if y_cols:
-            cleaned_df, report = clean_dataframe(
-                raw_df, date_col, y_cols,
-                dup_action=dup_action,
-                missing_action=missing_action,
+            cleaned_df, report, freq_info = _clean_pipeline(
+                _df_hash(raw_df), raw_df, date_col, tuple(y_cols),
+                dup_action, missing_action,
             )
-            freq_info = detect_frequency(cleaned_df, date_col)
-            cleaned_df = add_time_features(cleaned_df, date_col)
-
             st.session_state.cleaned_df = cleaned_df
             st.session_state.cleaning_report = report
             st.session_state.freq_info = freq_info
@@ -293,6 +321,7 @@ with st.sidebar:
                 "Override frequency label (optional)",
                 value="",
                 help="e.g. Daily, Weekly, Monthly, Quarterly, Yearly",
+                key="sidebar_freq_override",
             )
             if freq_override.strip():
                 st.session_state.freq_info = FrequencyInfo(
@@ -303,19 +332,10 @@ with st.sidebar:
 
             # ------ QueryChat ------
             if check_querychat_available():
-                current_hash = _df_hash(cleaned_df) + str(y_cols)
-                if st.session_state.qc_hash != current_hash:
-                    st.session_state.qc = create_querychat(
-                        cleaned_df,
-                        name="uploaded data",
-                        date_col=date_col,
-                        y_cols=y_cols,
-                        freq_label=st.session_state.freq_info.label,
-                    )
-                    st.session_state.qc_hash = current_hash
                 st.divider()
                 st.subheader("QueryChat")
-                st.session_state.qc.ui()
+                _querychat_fragment(cleaned_df, date_col, y_cols,
+                                     st.session_state.freq_info.label)
             else:
                 st.divider()
                 st.info(
@@ -345,7 +365,9 @@ with st.sidebar:
     )
     st.caption(
         "**Privacy:** All processing is in-memory. "
-        "Only chart images (never raw data) are sent to the AI when you click Interpret."
+        "If you click **Interpret Chart with AI**, the chart image is sent to OpenAI — "
+        "do not include sensitive data in your charts. "
+        "QueryChat protects your privacy by only passing metadata (not your data) to OpenAI."
     )
 
 # ---------------------------------------------------------------------------
@@ -429,7 +451,26 @@ with tab_single:
         n_colors = max(12, len(y_cols))
         palette_colors = get_palette_colors(palette_name, n_colors)
         swatch_fig = render_palette_preview(palette_colors[:8])
-        st.pyplot(swatch_fig, width="stretch")
+        st.pyplot(swatch_fig)
+
+        # Color-by control (for colored markers chart)
+        color_by = None
+        if chart_type == "Line – Colored Markers":
+            if "month" in working_df.columns:
+                color_by = st.selectbox(
+                    "Color by",
+                    ["month", "quarter", "year", "day_of_week"],
+                    key="color_by_a",
+                )
+            else:
+                other_cols = [
+                    c for c in working_df.columns
+                    if c not in (date_col, active_y)
+                ][:5]
+                if other_cols:
+                    color_by = st.selectbox(
+                        "Color by", other_cols, key="color_by_a",
+                    )
 
         # Chart-specific controls
         period_label = "month"
@@ -460,15 +501,7 @@ with tab_single:
                     style_dict=style_dict, palette_colors=palette_colors,
                 )
 
-            elif chart_type == "Line – Colored Markers":
-                if "month" in df_plot.columns:
-                    color_by = st.selectbox(
-                        "Color by",
-                        ["month", "quarter", "year", "day_of_week"],
-                        key="color_by_a",
-                    )
-                else:
-                    color_by = st.selectbox("Color by", [c for c in df_plot.columns if c not in (date_col, active_y)][:5], key="color_by_a")
+            elif chart_type == "Line – Colored Markers" and color_by is not None:
                 fig = plot_line_colored_markers(
                     df_plot, date_col, active_y,
                     color_by=color_by, palette_colors=palette_colors,
@@ -556,7 +589,7 @@ with tab_single:
             st.error(f"Chart error: {exc}")
 
         if fig is not None:
-            st.pyplot(fig, width="stretch")
+            st.pyplot(fig)
 
     # ---- Summary stats expander -------------------------------------------
     with st.expander("Summary Statistics", expanded=False):
@@ -566,8 +599,8 @@ with tab_single:
     # ---- AI Interpretation ------------------------------------------------
     with st.expander("AI Chart Interpretation", expanded=False):
         st.caption(
-            "The chart image (PNG) and metadata are sent to OpenAI. "
-            "No raw data leaves this app."
+            "The chart image (PNG) is sent to OpenAI for interpretation. "
+            "Do not include sensitive data in your charts."
         )
         if not check_api_key_available():
             st.warning("Set `OPENAI_API_KEY` to enable AI interpretation.")
@@ -625,7 +658,7 @@ with tab_few:
                     style_dict=style_dict,
                     palette_colors=palette_b,
                 )
-                st.pyplot(fig_panel, width="stretch")
+                st.pyplot(fig_panel)
             except Exception as exc:
                 st.error(f"Panel chart error: {exc}")
 
@@ -693,6 +726,6 @@ with tab_many:
                     style_dict=style_dict,
                     palette_colors=palette_c,
                 )
-                st.pyplot(fig_spag, width="stretch")
+                st.pyplot(fig_spag)
             except Exception as exc:
                 st.error(f"Spaghetti chart error: {exc}")

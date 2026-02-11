@@ -1,0 +1,6 @@
+.env
+.claude/
+__pycache__/
+requirements.md
+*.Rproj
+.Rproj.user/
