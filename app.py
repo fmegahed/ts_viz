@@ -668,12 +668,10 @@ with st.sidebar:
         """
         <div class="dev-card">
             <div class="dev-row">
-                <div class="dev-avatar">
-                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                        <path d="M11 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0"/>
-                        <path fill-rule="evenodd" d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 0 0-5.468 11.37c.69-1.198 1.97-2.015 3.526-2.015h3.884c1.556 0 2.835.817 3.526 2.014A7 7 0 0 0 8 1"/>
-                    </svg>
-                </div>
+                <svg class="dev-avatar" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <path d="M11 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0"/>
+                    <path fill-rule="evenodd" d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 0 0-5.468 11.37c.69-1.198 1.97-2.015 3.526-2.015h3.884c1.556 0 2.835.817 3.526 2.014A7 7 0 0 0 8 1"/>
+                </svg>
                 <div>
                     <div class="dev-name">Fadel M. Megahed</div>
                     <div class="dev-role">

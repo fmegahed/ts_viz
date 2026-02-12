@@ -105,68 +105,53 @@ def apply_miami_theme() -> None:
 
         /* ---- Sidebar developer card ---- */
         .dev-card {{
-            border: 1px solid {_BORDER_GRAY};
-            border-radius: 8px;
-            padding: 0.75rem;
-            background: {_WHITE};
+            padding: 0;
+            background: transparent;
         }}
         .dev-row {{
             display: flex;
-            gap: 0.6rem;
+            gap: 0.5rem;
             align-items: flex-start;
         }}
-        .dev-avatar {{
-            width: 42px;
-            height: 42px;
-            min-width: 42px;
-            border-radius: 50%;
-            background: {_LIGHT_GRAY};
-            color: {_BLACK};
-            border: 1px solid {_BORDER_GRAY};
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }}
         .dev-avatar svg {{
-            width: 24px;
-            height: 24px;
-            fill: #666;
+            width: 2em;
+            height: 2em;
+            fill: {_BLACK};
         }}
         .dev-name {{
-            font-weight: 700;
+            font-weight: 600;
             color: {_BLACK};
-            font-size: 0.88rem;
+            font-size: 0.82rem;
             line-height: 1.3;
         }}
         .dev-role {{
-            font-size: 0.74rem;
-            color: #5f6b73;
+            font-size: 0.7rem;
+            color: #6c757d;
             line-height: 1.3;
-            margin-top: 0.1rem;
         }}
         .dev-links {{
             display: flex;
-            gap: 0.35rem;
+            gap: 0.3rem;
             flex-wrap: wrap;
-            margin-top: 0.55rem;
+            margin-top: 0.35rem;
         }}
         .dev-link {{
             display: inline-flex;
             align-items: center;
-            gap: 0.25rem;
-            padding: 0.25rem 0.5rem;
-            border: 1px solid #C6C6C6;
-            border-radius: 5px;
-            font-size: 0.73rem;
-            color: #1a1a1a;
+            gap: 0.2rem;
+            padding: 0.15rem 0.4rem;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            color: {_BLACK};
             text-decoration: none;
             background: {_WHITE};
-            line-height: 1.2;
+            line-height: 1.4;
             white-space: nowrap;
         }}
         .dev-link svg {{
-            width: 13px;
-            height: 13px;
+            width: 11px;
+            height: 11px;
             fill: currentColor;
         }}
         .dev-link:hover {{
