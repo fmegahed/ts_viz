@@ -846,39 +846,77 @@ report: CleaningReport | None = st.session_state.cleaning_report
 
 if cleaned_df is None or not y_cols:
     st.title("Time Series Visualizer")
-    st.write(
-        "Upload a CSV or choose a demo dataset from the sidebar to get started."
-    )
+    st.caption("ISA 444 · Miami University · Farmer School of Business")
 
-    col_about, col_how = st.columns(2)
-    with col_about:
-        st.subheader("About")
+    st.markdown("")  # spacer
+
+    # --- Getting started steps as visual cards ---
+    st.markdown("#### Get Started in 3 Steps")
+    c1, c2, c3 = st.columns(3)
+    with c1:
         st.markdown(
-            "An interactive app for **ISA 444** students at Miami University "
-            "to explore time-series data, create publication-quality charts, "
-            "and get AI-powered chart interpretation."
+            '<div style="background:#F5F5F5; border-radius:8px; padding:1rem; '
+            'border-left:4px solid #C41230; height:100%;">'
+            '<div style="font-size:1.6rem; font-weight:700; color:#C41230;">1</div>'
+            '<div style="font-weight:600; margin:0.3rem 0 0.2rem;">Load Data</div>'
+            '<div style="font-size:0.82rem; color:#444;">'
+            'Upload a CSV from the sidebar or pick one of the built-in demo datasets.'
+            '</div></div>',
+            unsafe_allow_html=True,
         )
+    with c2:
         st.markdown(
-            "**Features:**\n"
-            "- Auto-detect delimiters, date columns, and numeric formats\n"
-            "- 9+ chart types: line, seasonal, ACF/PACF, decomposition, and more\n"
-            "- Multi-series support with panel and spaghetti plots\n"
-            "- AI chart interpretation via OpenAI vision\n"
-            "- Natural-language data filtering with QueryChat"
+            '<div style="background:#F5F5F5; border-radius:8px; padding:1rem; '
+            'border-left:4px solid #C41230; height:100%;">'
+            '<div style="font-size:1.6rem; font-weight:700; color:#C41230;">2</div>'
+            '<div style="font-weight:600; margin:0.3rem 0 0.2rem;">Pick Columns</div>'
+            '<div style="font-size:0.82rem; color:#444;">'
+            'Select a date column and one or more numeric value columns. '
+            'The app auto-detects sensible defaults.'
+            '</div></div>',
+            unsafe_allow_html=True,
         )
-    with col_how:
-        st.subheader("How to Use")
+    with c3:
         st.markdown(
-            "1. **Upload** a CSV file or pick a **demo dataset** from the sidebar\n"
-            "2. **Select** a date column and one or more value columns\n"
-            "3. **Choose** a chart type from the *Single Series* tab\n"
-            "4. Use the *Few Series* and *Many Series* tabs for multi-column comparisons\n"
-            "5. Expand **Summary Statistics** for descriptive stats and stationarity tests\n"
-            "6. Click **Interpret Chart with AI** to get AI-generated insights"
+            '<div style="background:#F5F5F5; border-radius:8px; padding:1rem; '
+            'border-left:4px solid #C41230; height:100%;">'
+            '<div style="font-size:1.6rem; font-weight:700; color:#C41230;">3</div>'
+            '<div style="font-weight:600; margin:0.3rem 0 0.2rem;">Explore</div>'
+            '<div style="font-size:0.82rem; color:#444;">'
+            'Choose from 9+ chart types, view summary statistics, '
+            'and get AI-powered chart interpretation.'
+            '</div></div>',
+            unsafe_allow_html=True,
         )
+
+    st.markdown("")  # spacer
+
+    # --- Features and privacy ---
+    f1, f2 = st.columns(2)
+    with f1:
+        st.markdown("#### Features")
         st.markdown(
-            "**Privacy:** All processing is in-memory. Only chart images "
-            "(never raw data) are sent to OpenAI when you click Interpret."
+            "| | |\n"
+            "|:--|:--|\n"
+            "| **Smart Import** | Auto-detect delimiters, dates, and numeric formats |\n"
+            "| **9+ Chart Types** | Line, seasonal, ACF/PACF, decomposition, lag, and more |\n"
+            "| **Multi-Series** | Panel (small multiples) and spaghetti plots |\n"
+            "| **AI Insights** | GPT vision analyzes your charts and returns structured interpretation |\n"
+            "| **QueryChat** | Natural-language data filtering powered by DuckDB |"
+        )
+    with f2:
+        st.markdown("#### Good to Know")
+        st.info(
+            "**Privacy** — All data processing happens in-memory. "
+            "No data is stored on disk. Only chart images (never raw data) "
+            "are sent to OpenAI when you click *Interpret Chart with AI*.",
+            icon="\U0001f512",
+        )
+        st.info(
+            "**Demo Datasets** — Three built-in datasets are available in the sidebar: "
+            "monthly retail sales (single series), quarterly revenue by region (wide), "
+            "and daily stock prices with 20 tickers (long).",
+            icon="\U0001f4ca",
         )
 
     st.stop()
