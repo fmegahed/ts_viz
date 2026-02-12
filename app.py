@@ -132,6 +132,399 @@ def _querychat_fragment(cleaned_df, date_col, y_cols, freq_label):
     st.session_state.qc.ui()
 
 
+@st.fragment
+def _data_quality_fragment(report: CleaningReport | None) -> None:
+    if report is None:
+        return
+    with st.expander("Data Quality Report", expanded=False):
+        _render_cleaning_report(report)
+
+
+@st.fragment
+def _single_chart_fragment(working_df, date_col, y_cols, freq_info, style_dict):
+    if len(y_cols) == 1:
+        active_y = y_cols[0]
+    else:
+        active_y = st.selectbox("Select value column", y_cols, key="tab_a_y")
+
+    # ---- Date range filter ------------------------------------------------
+    dr_mode = st.radio(
+        "Date range",
+        ["All", "Last N years", "Custom"],
+        horizontal=True,
+        key="dr_mode",
+    )
+    df_plot = working_df.copy()
+    if dr_mode == "Last N years":
+        n_years = st.slider("Years", 1, 20, 5, key="dr_n")
+        cutoff = df_plot[date_col].max() - pd.DateOffset(years=n_years)
+        df_plot = df_plot[df_plot[date_col] >= cutoff]
+    elif dr_mode == "Custom":
+        d_min = df_plot[date_col].min().date()
+        d_max = df_plot[date_col].max().date()
+        sel = st.slider("Date range", d_min, d_max, (d_min, d_max), key="dr_custom")
+        df_plot = df_plot[
+            (df_plot[date_col].dt.date >= sel[0])
+            & (df_plot[date_col].dt.date <= sel[1])
+        ]
+
+    if df_plot.empty:
+        st.warning("No data in selected range.")
+        st.session_state["_single_df_plot"] = None
+        st.session_state["_single_fig"] = None
+        st.session_state["_single_active_y"] = None
+        st.session_state["_single_chart_type"] = None
+        return
+
+    # ---- Chart controls ---------------------------------------------------
+    col_chart, col_opts = st.columns([2, 1])
+    with col_opts:
+        chart_type = st.selectbox("Chart type", _CHART_TYPES, key="chart_type_a")
+
+        palette_name = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_a")
+        n_colors = max(12, len(y_cols))
+        palette_colors = get_palette_colors(palette_name, n_colors)
+        swatch_fig = render_palette_preview(palette_colors[:8])
+        st.pyplot(swatch_fig, use_container_width=True)
+
+        # Color-by control (for colored markers chart)
+        color_by = None
+        if chart_type == "Line â€“ Colored Markers":
+            if "month" in working_df.columns:
+                color_by = st.selectbox(
+                    "Color by",
+                    ["month", "quarter", "year", "day_of_week"],
+                    key="color_by_a",
+                )
+            else:
+                other_cols = [
+                    c for c in working_df.columns
+                    if c not in (date_col, active_y)
+                ][:5]
+                if other_cols:
+                    color_by = st.selectbox(
+                        "Color by", other_cols, key="color_by_a",
+                    )
+
+        # Chart-specific controls
+        period_label = "month"
+        window_size = 12
+        lag_val = 1
+        decomp_model = "additive"
+
+        if chart_type in ("Seasonal Plot", "Seasonal Sub-series"):
+            period_label = st.selectbox("Period", ["month", "quarter"], key="period_a")
+
+        if chart_type == "Rolling Mean Overlay":
+            window_size = st.slider("Window", 2, 52, 12, key="window_a")
+
+        if chart_type == "Lag Plot":
+            lag_val = st.slider("Lag", 1, 52, 1, key="lag_a")
+
+        if chart_type == "Decomposition":
+            decomp_model = st.selectbox("Model", ["additive", "multiplicative"], key="decomp_a")
+
+    # ---- Render chart -----------------------------------------------------
+    with col_chart:
+        fig = None
+        try:
+            if chart_type == "Line with Markers":
+                fig = plot_line_with_markers(
+                    df_plot, date_col, active_y,
+                    title=f"{active_y} over Time",
+                    style_dict=style_dict, palette_colors=palette_colors,
+                )
+
+            elif chart_type == "Line â€“ Colored Markers" and color_by is not None:
+                fig = plot_line_colored_markers(
+                    df_plot, date_col, active_y,
+                    color_by=color_by, palette_colors=palette_colors,
+                    title=f"{active_y} colored by {color_by}",
+                    style_dict=style_dict,
+                )
+
+            elif chart_type == "Seasonal Plot":
+                fig = plot_seasonal(
+                    df_plot, date_col, active_y,
+                    period=period_label,
+                    palette_name_colors=palette_colors,
+                    title=f"Seasonal Plot â€“ {active_y}",
+                    style_dict=style_dict,
+                )
+
+            elif chart_type == "Seasonal Sub-series":
+                fig = plot_seasonal_subseries(
+                    df_plot, date_col, active_y,
+                    period=period_label,
+                    title=f"Seasonal Sub-series â€“ {active_y}",
+                    style_dict=style_dict, palette_colors=palette_colors,
+                )
+
+            elif chart_type == "ACF / PACF":
+                series = df_plot[active_y].dropna()
+                acf_vals, acf_ci, pacf_vals, pacf_ci = compute_acf_pacf(series)
+                fig = plot_acf_pacf(
+                    acf_vals, acf_ci, pacf_vals, pacf_ci,
+                    title=f"ACF / PACF â€“ {active_y}",
+                    style_dict=style_dict,
+                )
+
+            elif chart_type == "Decomposition":
+                period_int = None
+                if freq_info and freq_info.label == "Monthly":
+                    period_int = 12
+                elif freq_info and freq_info.label == "Quarterly":
+                    period_int = 4
+                elif freq_info and freq_info.label == "Weekly":
+                    period_int = 52
+                elif freq_info and freq_info.label == "Daily":
+                    period_int = 365
+
+                result = compute_decomposition(
+                    df_plot, date_col, active_y,
+                    model=decomp_model, period=period_int,
+                )
+                fig = plot_decomposition(
+                    result,
+                    title=f"Decomposition â€“ {active_y} ({decomp_model})",
+                    style_dict=style_dict,
+                )
+
+            elif chart_type == "Rolling Mean Overlay":
+                fig = plot_rolling_overlay(
+                    df_plot, date_col, active_y,
+                    window=window_size,
+                    title=f"Rolling {window_size}-pt Mean â€“ {active_y}",
+                    style_dict=style_dict, palette_colors=palette_colors,
+                )
+
+            elif chart_type == "Year-over-Year Change":
+                yoy_result = compute_yoy_change(df_plot, date_col, active_y)
+                yoy_df = pd.DataFrame({
+                    "date": yoy_result[date_col],
+                    "abs_change": yoy_result["yoy_abs_change"],
+                    "pct_change": yoy_result["yoy_pct_change"],
+                }).dropna()
+                fig = plot_yoy_change(
+                    df_plot, date_col, active_y, yoy_df,
+                    title=f"Year-over-Year Change â€“ {active_y}",
+                    style_dict=style_dict,
+                )
+
+            elif chart_type == "Lag Plot":
+                fig = plot_lag(
+                    df_plot[active_y],
+                    lag=lag_val,
+                    title=f"Lag-{lag_val} Plot â€“ {active_y}",
+                    style_dict=style_dict,
+                )
+
+        except Exception as exc:
+            st.error(f"Chart error: {exc}")
+
+        if fig is not None:
+            st.pyplot(fig, use_container_width=True)
+
+    st.session_state["_single_df_plot"] = df_plot
+    st.session_state["_single_fig"] = fig
+    st.session_state["_single_active_y"] = active_y
+    st.session_state["_single_chart_type"] = chart_type
+
+
+@st.fragment
+def _single_insights_fragment(freq_info, date_col):
+    df_plot = st.session_state.get("_single_df_plot")
+    active_y = st.session_state.get("_single_active_y")
+    chart_type = st.session_state.get("_single_chart_type")
+    fig = st.session_state.get("_single_fig")
+
+    if df_plot is None or active_y is None:
+        return
+
+    # ---- Summary stats expander -------------------------------------------
+    with st.expander("Summary Statistics", expanded=False):
+        stats = compute_summary_stats(df_plot, date_col, active_y)
+        _render_summary_stats(stats)
+
+    # ---- AI Interpretation ------------------------------------------------
+    _render_ai_interpretation(
+        fig, chart_type, freq_info, df_plot, date_col, active_y, "interpret_a",
+    )
+
+
+@st.fragment
+def _panel_chart_fragment(working_df, date_col, y_cols, style_dict):
+    if len(y_cols) < 2:
+        st.info("Select 2+ value columns in the sidebar to use panel plots.")
+        st.session_state["_panel_fig"] = None
+        return
+
+    st.subheader("Panel Plot (Small Multiples)")
+
+    if "panel_cols" not in st.session_state:
+        st.session_state["panel_cols"] = y_cols[:4]
+    else:
+        st.session_state["panel_cols"] = [
+            c for c in st.session_state["panel_cols"] if c in y_cols
+        ]
+    panel_cols = st.multiselect("Columns to plot", y_cols, key="panel_cols")
+
+    if panel_cols:
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            panel_chart = st.selectbox(
+                "Chart type", ["line", "bar"], key="panel_chart"
+            )
+        with pc2:
+            if "panel_shared" not in st.session_state:
+                st.session_state["panel_shared"] = True
+            shared_y = st.checkbox("Shared Y axis", key="panel_shared")
+
+        palette_name_b = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_b")
+        palette_b = get_palette_colors(palette_name_b, len(panel_cols))
+
+        fig_panel = None
+        try:
+            fig_panel = plot_panel(
+                working_df, date_col, panel_cols,
+                chart_type=panel_chart,
+                shared_y=shared_y,
+                title="Panel Comparison",
+                style_dict=style_dict,
+                palette_colors=palette_b,
+            )
+            st.pyplot(fig_panel, use_container_width=True)
+        except Exception as exc:
+            st.error(f"Panel chart error: {exc}")
+
+        st.session_state["_panel_fig"] = fig_panel
+    else:
+        st.session_state["_panel_fig"] = None
+
+
+@st.fragment
+def _panel_insights_fragment(working_df, date_col, freq_info):
+    panel_cols = st.session_state.get("panel_cols") or []
+    fig_panel = st.session_state.get("_panel_fig")
+    panel_chart = st.session_state.get("panel_chart", "line")
+
+    if not panel_cols:
+        return
+
+    # Per-series summary table
+    with st.expander("Per-series Summary", expanded=False):
+        summary_df = compute_multi_series_summary(
+            working_df, date_col, panel_cols,
+        )
+        st.dataframe(
+            summary_df.style.format({
+                "mean": "{:,.2f}",
+                "std": "{:,.2f}",
+                "min": "{:,.2f}",
+                "max": "{:,.2f}",
+                "trend_slope": "{:,.4f}",
+                "adf_pvalue": "{:.4f}",
+            }),
+            use_container_width=True,
+        )
+
+    # AI Interpretation
+    _render_ai_interpretation(
+        fig_panel, f"Panel ({panel_chart})", freq_info,
+        working_df, date_col, ", ".join(panel_cols), "interpret_b",
+    )
+
+
+@st.fragment
+def _spaghetti_chart_fragment(working_df, date_col, y_cols, style_dict):
+    if len(y_cols) < 2:
+        st.info("Select 2+ value columns in the sidebar to use spaghetti plots.")
+        st.session_state["_spag_fig"] = None
+        return
+
+    st.subheader("Spaghetti Plot")
+
+    if "spag_cols" not in st.session_state:
+        st.session_state["spag_cols"] = list(y_cols)
+    else:
+        st.session_state["spag_cols"] = [
+            c for c in st.session_state["spag_cols"] if c in y_cols
+        ]
+    spag_cols = st.multiselect("Columns to include", y_cols, key="spag_cols")
+
+    if spag_cols:
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            alpha_val = st.slider("Alpha", 0.05, 1.0, 0.15, 0.05, key="spag_alpha")
+        with sc2:
+            top_n = st.number_input("Highlight top N", 0, len(spag_cols), 0, key="spag_topn")
+            top_n = top_n if top_n > 0 else None
+        with sc3:
+            highlight = st.selectbox(
+                "Highlight series",
+                ["(none)"] + spag_cols,
+                key="spag_highlight",
+            )
+            highlight_col = highlight if highlight != "(none)" else None
+
+        show_median = st.checkbox("Show Median + IQR band", key="spag_median")
+
+        palette_name_c = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_c")
+        palette_c = get_palette_colors(palette_name_c, len(spag_cols))
+
+        fig_spag = None
+        try:
+            fig_spag = plot_spaghetti(
+                working_df, date_col, spag_cols,
+                alpha=alpha_val,
+                highlight_col=highlight_col,
+                top_n=top_n,
+                show_median_band=show_median,
+                title="Spaghetti Plot",
+                style_dict=style_dict,
+                palette_colors=palette_c,
+            )
+            st.pyplot(fig_spag, use_container_width=True)
+        except Exception as exc:
+            st.error(f"Spaghetti chart error: {exc}")
+
+        st.session_state["_spag_fig"] = fig_spag
+    else:
+        st.session_state["_spag_fig"] = None
+
+
+@st.fragment
+def _spaghetti_insights_fragment(working_df, date_col, freq_info):
+    spag_cols = st.session_state.get("spag_cols") or []
+    fig_spag = st.session_state.get("_spag_fig")
+
+    if not spag_cols:
+        return
+
+    # Per-series summary table
+    with st.expander("Per-series Summary", expanded=False):
+        spag_summary = compute_multi_series_summary(
+            working_df, date_col, spag_cols,
+        )
+        st.dataframe(
+            spag_summary.style.format({
+                "mean": "{:,.2f}",
+                "std": "{:,.2f}",
+                "min": "{:,.2f}",
+                "max": "{:,.2f}",
+                "trend_slope": "{:,.4f}",
+                "adf_pvalue": "{:.4f}",
+            }),
+            use_container_width=True,
+        )
+
+    # AI Interpretation
+    _render_ai_interpretation(
+        fig_spag, "Spaghetti Plot", freq_info,
+        working_df, date_col, ", ".join(spag_cols), "interpret_c",
+    )
+
+
 def _render_cleaning_report(report: CleaningReport) -> None:
     """Show a data-quality card."""
     c1, c2, c3 = st.columns(3)
@@ -261,6 +654,60 @@ with st.sidebar:
             <span style="font-size:0.82rem; color:#000;">
                 ISA 444 &middot; Miami University
             </span>
+            <div style="margin-top:0.35rem; font-size:0.75rem; color:#000;">
+                Vibe-Coded by <strong>Fadel M. Megahed</strong><br>
+                Version <strong>0.2.0</strong>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.divider()
+    st.subheader("Developer")
+    st.markdown(
+        """
+        <div class="dev-card">
+            <div class="dev-row">
+                <div class="dev-avatar">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <path d="M11 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0"/>
+                        <path fill-rule="evenodd" d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 0 0-5.468 11.37c.69-1.198 1.97-2.015 3.526-2.015h3.884c1.556 0 2.835.817 3.526 2.014A7 7 0 0 0 8 1"/>
+                    </svg>
+                </div>
+                <div>
+                    <div class="dev-name">Fadel M. Megahed</div>
+                    <div class="dev-role">
+                        Raymond E. Glos Professor, Farmer School of Business<br>
+                        Miami University
+                    </div>
+                </div>
+            </div>
+            <div class="dev-links">
+                <a class="dev-link" href="mailto:fmegahed@miamioh.edu">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <path d="M0 4a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V4zm2-1a1 1 0 0 0-1 1v.217l7 4.2 7-4.2V4a1 1 0 0 0-1-1H2zm13 2.383-4.708 2.825L15 11.105zM14.247 12.6 9.114 8.98 8 9.67 6.886 8.98 1.753 12.6A1 1 0 0 0 2 13h12a1 1 0 0 0 .247-.4zM1 11.105l4.708-2.897L1 5.383z"/>
+                    </svg>
+                    Email
+                </a>
+                <a class="dev-link" href="https://www.linkedin.com/in/fadel-megahed-289046b4/" target="_blank">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <path d="M0 1.146C0 .513.526 0 1.175 0h13.65C15.475 0 16 .513 16 1.146v13.708c0 .633-.525 1.146-1.175 1.146H1.175C.526 16 0 15.487 0 14.854zM4.943 13.5V6H2.542v7.5zM3.743 4.927c.837 0 1.358-.554 1.358-1.248-.015-.709-.521-1.248-1.342-1.248-.821 0-1.358.54-1.358 1.248 0 .694.521 1.248 1.327 1.248zm4.908 8.573V9.359c0-.22.016-.44.08-.598.176-.44.576-.897 1.248-.897.88 0 1.232.676 1.232 1.667v4.0h2.401V9.247c0-2.22-1.184-3.252-2.764-3.252-1.274 0-1.845.7-2.165 1.193h.016V6H6.35c.03.7 0 7.5 0 7.5z"/>
+                    </svg>
+                    LinkedIn
+                </a>
+                <a class="dev-link" href="https://miamioh.edu/fsb/directory/?up=/directory/megahefm" target="_blank">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m7-7a7 7 0 0 0-2.468.45c.303.393.58.825.82 1.3A5.5 5.5 0 0 1 7 3.5zm2 0v2.5a5.5 5.5 0 0 1 1.648-.75 7 7 0 0 0-.82-1.3A7 7 0 0 0 9 1m3.97 3.06a6.5 6.5 0 0 0-1.71-.9c.21.53.36 1.1.44 1.69h2.21a7 7 0 0 0-.94-.79M15 8a7 7 0 0 0-.33-2h-2.34a6.5 6.5 0 0 1 0 4h2.34c.22-.64.33-1.32.33-2m-1.03 3.94a7 7 0 0 0 .94-.79h-2.21a6.5 6.5 0 0 1-.44 1.69c.62-.22 1.2-.53 1.71-.9M9 15a7 7 0 0 0 1.648-.75c.24-.48.517-.91.82-1.3A7 7 0 0 0 9 15m-2 0v-2.5a5.5 5.5 0 0 1-1.648.75c.24.48.517.91.82 1.3A7 7 0 0 0 7 15M4.03 11.94a6.5 6.5 0 0 0 1.71.9A6.5 6.5 0 0 1 5.3 11.15H3.09c.25.3.58.57.94.79M1 8c0 .68.11 1.36.33 2h2.34a6.5 6.5 0 0 1 0-4H1.33A7 7 0 0 0 1 8m1.03-3.94c.36.37.78.68 1.24.9a6.5 6.5 0 0 1 .44-1.69H2.06a7 7 0 0 0-.03.79"/>
+                    </svg>
+                    Website
+                </a>
+                <a class="dev-link" href="https://github.com/fmegahed/" target="_blank">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8"/>
+                    </svg>
+                    GitHub
+                </a>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -345,6 +792,7 @@ with st.sidebar:
                 st.session_state.freq_info = freq_info
                 st.session_state._clean_key = _key
 
+            cleaned_df = st.session_state.cleaned_df
             freq_info = st.session_state.freq_info
             st.caption(f"Frequency: **{freq_info.label}** "
                        f"({'regular' if freq_info.is_regular else 'irregular'})")
@@ -361,13 +809,15 @@ with st.sidebar:
                     median_delta=freq_info.median_delta,
                     is_regular=freq_info.is_regular,
                 )
+                freq_info = st.session_state.freq_info
 
             # ------ QueryChat ------
             if check_querychat_available():
                 st.divider()
                 st.subheader("QueryChat")
-                _querychat_fragment(cleaned_df, date_col, y_cols,
-                                     st.session_state.freq_info.label)
+                if cleaned_df is not None:
+                    _querychat_fragment(cleaned_df, date_col, y_cols,
+                                         st.session_state.freq_info.label)
             else:
                 st.divider()
                 st.info(
@@ -383,18 +833,6 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.markdown(
-        """
-        <div style="text-align:center; padding:0.5rem 0;">
-            <span style="font-size:0.75rem; color:#000;">
-                Developed by <strong>Fadel M. Megahed</strong><br>
-                for <strong>ISA 444</strong> &middot; Miami University<br>
-                Version <strong>0.1.0</strong>
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
     st.caption(
         "**Privacy:** All processing is in-memory. "
         "If you click **Interpret Chart with AI**, the chart image is sent to OpenAI — "
@@ -429,9 +867,7 @@ else:
     working_df = cleaned_df
 
 # Data quality report
-if report is not None:
-    with st.expander("Data Quality Report", expanded=False):
-        _render_cleaning_report(report)
+_data_quality_fragment(report)
 
 # ---------------------------------------------------------------------------
 # Tabs
@@ -446,335 +882,19 @@ tab_single, tab_few, tab_many = st.tabs([
 # Tab A — Single Series
 # ===================================================================
 with tab_single:
-    if len(y_cols) == 1:
-        active_y = y_cols[0]
-    else:
-        active_y = st.selectbox("Select value column", y_cols, key="tab_a_y")
-
-    # ---- Date range filter ------------------------------------------------
-    dr_mode = st.radio(
-        "Date range",
-        ["All", "Last N years", "Custom"],
-        horizontal=True,
-        key="dr_mode",
-    )
-    df_plot = working_df.copy()
-    if dr_mode == "Last N years":
-        n_years = st.slider("Years", 1, 20, 5, key="dr_n")
-        cutoff = df_plot[date_col].max() - pd.DateOffset(years=n_years)
-        df_plot = df_plot[df_plot[date_col] >= cutoff]
-    elif dr_mode == "Custom":
-        d_min = df_plot[date_col].min().date()
-        d_max = df_plot[date_col].max().date()
-        sel = st.slider("Date range", d_min, d_max, (d_min, d_max), key="dr_custom")
-        df_plot = df_plot[
-            (df_plot[date_col].dt.date >= sel[0])
-            & (df_plot[date_col].dt.date <= sel[1])
-        ]
-
-    if df_plot.empty:
-        st.warning("No data in selected range.")
-        st.stop()
-
-    # ---- Chart controls ---------------------------------------------------
-    col_chart, col_opts = st.columns([2, 1])
-    with col_opts:
-        chart_type = st.selectbox("Chart type", _CHART_TYPES, key="chart_type_a")
-
-        palette_name = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_a")
-        n_colors = max(12, len(y_cols))
-        palette_colors = get_palette_colors(palette_name, n_colors)
-        swatch_fig = render_palette_preview(palette_colors[:8])
-        st.pyplot(swatch_fig, use_container_width=True)
-
-        # Color-by control (for colored markers chart)
-        color_by = None
-        if chart_type == "Line – Colored Markers":
-            if "month" in working_df.columns:
-                color_by = st.selectbox(
-                    "Color by",
-                    ["month", "quarter", "year", "day_of_week"],
-                    key="color_by_a",
-                )
-            else:
-                other_cols = [
-                    c for c in working_df.columns
-                    if c not in (date_col, active_y)
-                ][:5]
-                if other_cols:
-                    color_by = st.selectbox(
-                        "Color by", other_cols, key="color_by_a",
-                    )
-
-        # Chart-specific controls
-        period_label = "month"
-        window_size = 12
-        lag_val = 1
-        decomp_model = "additive"
-
-        if chart_type in ("Seasonal Plot", "Seasonal Sub-series"):
-            period_label = st.selectbox("Period", ["month", "quarter"], key="period_a")
-
-        if chart_type == "Rolling Mean Overlay":
-            window_size = st.slider("Window", 2, 52, 12, key="window_a")
-
-        if chart_type == "Lag Plot":
-            lag_val = st.slider("Lag", 1, 52, 1, key="lag_a")
-
-        if chart_type == "Decomposition":
-            decomp_model = st.selectbox("Model", ["additive", "multiplicative"], key="decomp_a")
-
-    # ---- Render chart -----------------------------------------------------
-    with col_chart:
-        fig = None
-        try:
-            if chart_type == "Line with Markers":
-                fig = plot_line_with_markers(
-                    df_plot, date_col, active_y,
-                    title=f"{active_y} over Time",
-                    style_dict=style_dict, palette_colors=palette_colors,
-                )
-
-            elif chart_type == "Line – Colored Markers" and color_by is not None:
-                fig = plot_line_colored_markers(
-                    df_plot, date_col, active_y,
-                    color_by=color_by, palette_colors=palette_colors,
-                    title=f"{active_y} colored by {color_by}",
-                    style_dict=style_dict,
-                )
-
-            elif chart_type == "Seasonal Plot":
-                fig = plot_seasonal(
-                    df_plot, date_col, active_y,
-                    period=period_label,
-                    palette_name_colors=palette_colors,
-                    title=f"Seasonal Plot – {active_y}",
-                    style_dict=style_dict,
-                )
-
-            elif chart_type == "Seasonal Sub-series":
-                fig = plot_seasonal_subseries(
-                    df_plot, date_col, active_y,
-                    period=period_label,
-                    title=f"Seasonal Sub-series – {active_y}",
-                    style_dict=style_dict, palette_colors=palette_colors,
-                )
-
-            elif chart_type == "ACF / PACF":
-                series = df_plot[active_y].dropna()
-                acf_vals, acf_ci, pacf_vals, pacf_ci = compute_acf_pacf(series)
-                fig = plot_acf_pacf(
-                    acf_vals, acf_ci, pacf_vals, pacf_ci,
-                    title=f"ACF / PACF – {active_y}",
-                    style_dict=style_dict,
-                )
-
-            elif chart_type == "Decomposition":
-                period_int = None
-                if freq_info and freq_info.label == "Monthly":
-                    period_int = 12
-                elif freq_info and freq_info.label == "Quarterly":
-                    period_int = 4
-                elif freq_info and freq_info.label == "Weekly":
-                    period_int = 52
-                elif freq_info and freq_info.label == "Daily":
-                    period_int = 365
-
-                result = compute_decomposition(
-                    df_plot, date_col, active_y,
-                    model=decomp_model, period=period_int,
-                )
-                fig = plot_decomposition(
-                    result,
-                    title=f"Decomposition – {active_y} ({decomp_model})",
-                    style_dict=style_dict,
-                )
-
-            elif chart_type == "Rolling Mean Overlay":
-                fig = plot_rolling_overlay(
-                    df_plot, date_col, active_y,
-                    window=window_size,
-                    title=f"Rolling {window_size}-pt Mean – {active_y}",
-                    style_dict=style_dict, palette_colors=palette_colors,
-                )
-
-            elif chart_type == "Year-over-Year Change":
-                yoy_result = compute_yoy_change(df_plot, date_col, active_y)
-                yoy_df = pd.DataFrame({
-                    "date": yoy_result[date_col],
-                    "abs_change": yoy_result["yoy_abs_change"],
-                    "pct_change": yoy_result["yoy_pct_change"],
-                }).dropna()
-                fig = plot_yoy_change(
-                    df_plot, date_col, active_y, yoy_df,
-                    title=f"Year-over-Year Change – {active_y}",
-                    style_dict=style_dict,
-                )
-
-            elif chart_type == "Lag Plot":
-                fig = plot_lag(
-                    df_plot[active_y],
-                    lag=lag_val,
-                    title=f"Lag-{lag_val} Plot – {active_y}",
-                    style_dict=style_dict,
-                )
-
-        except Exception as exc:
-            st.error(f"Chart error: {exc}")
-
-        if fig is not None:
-            st.pyplot(fig, use_container_width=True)
-
-    # ---- Summary stats expander -------------------------------------------
-    with st.expander("Summary Statistics", expanded=False):
-        stats = compute_summary_stats(df_plot, date_col, active_y)
-        _render_summary_stats(stats)
-
-    # ---- AI Interpretation ------------------------------------------------
-    _render_ai_interpretation(
-        fig, chart_type, freq_info, df_plot, date_col, active_y, "interpret_a",
-    )
+    _single_chart_fragment(working_df, date_col, y_cols, freq_info, style_dict)
+    _single_insights_fragment(freq_info, date_col)
 
 # ===================================================================
 # Tab B — Few Series (Panel)
 # ===================================================================
 with tab_few:
-    if len(y_cols) < 2:
-        st.info("Select 2+ value columns in the sidebar to use panel plots.")
-    else:
-        st.subheader("Panel Plot (Small Multiples)")
-
-        if "panel_cols" not in st.session_state:
-            st.session_state["panel_cols"] = y_cols[:4]
-        else:
-            st.session_state["panel_cols"] = [
-                c for c in st.session_state["panel_cols"] if c in y_cols
-            ]
-        panel_cols = st.multiselect("Columns to plot", y_cols, key="panel_cols")
-
-        if panel_cols:
-            pc1, pc2 = st.columns(2)
-            with pc1:
-                panel_chart = st.selectbox(
-                    "Chart type", ["line", "bar"], key="panel_chart"
-                )
-            with pc2:
-                if "panel_shared" not in st.session_state:
-                    st.session_state["panel_shared"] = True
-                shared_y = st.checkbox("Shared Y axis", key="panel_shared")
-
-            palette_name_b = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_b")
-            palette_b = get_palette_colors(palette_name_b, len(panel_cols))
-
-            fig_panel = None
-            try:
-                fig_panel = plot_panel(
-                    working_df, date_col, panel_cols,
-                    chart_type=panel_chart,
-                    shared_y=shared_y,
-                    title="Panel Comparison",
-                    style_dict=style_dict,
-                    palette_colors=palette_b,
-                )
-                st.pyplot(fig_panel, use_container_width=True)
-            except Exception as exc:
-                st.error(f"Panel chart error: {exc}")
-
-            # Per-series summary table
-            with st.expander("Per-series Summary", expanded=False):
-                summary_df = compute_multi_series_summary(
-                    working_df, date_col, panel_cols,
-                )
-                st.dataframe(
-                    summary_df.style.format({
-                        "mean": "{:,.2f}",
-                        "std": "{:,.2f}",
-                        "min": "{:,.2f}",
-                        "max": "{:,.2f}",
-                        "trend_slope": "{:,.4f}",
-                        "adf_pvalue": "{:.4f}",
-                    }),
-                    use_container_width=True,
-                )
-
-            # AI Interpretation
-            _render_ai_interpretation(
-                fig_panel, f"Panel ({panel_chart})", freq_info,
-                working_df, date_col, ", ".join(panel_cols), "interpret_b",
-            )
+    _panel_chart_fragment(working_df, date_col, y_cols, style_dict)
+    _panel_insights_fragment(working_df, date_col, freq_info)
 
 # ===================================================================
 # Tab C — Many Series (Spaghetti)
 # ===================================================================
 with tab_many:
-    if len(y_cols) < 2:
-        st.info("Select 2+ value columns in the sidebar to use spaghetti plots.")
-    else:
-        st.subheader("Spaghetti Plot")
-
-        if "spag_cols" not in st.session_state:
-            st.session_state["spag_cols"] = list(y_cols)
-        else:
-            st.session_state["spag_cols"] = [
-                c for c in st.session_state["spag_cols"] if c in y_cols
-            ]
-        spag_cols = st.multiselect("Columns to include", y_cols, key="spag_cols")
-
-        if spag_cols:
-            sc1, sc2, sc3 = st.columns(3)
-            with sc1:
-                alpha_val = st.slider("Alpha", 0.05, 1.0, 0.15, 0.05, key="spag_alpha")
-            with sc2:
-                top_n = st.number_input("Highlight top N", 0, len(spag_cols), 0, key="spag_topn")
-                top_n = top_n if top_n > 0 else None
-            with sc3:
-                highlight = st.selectbox(
-                    "Highlight series",
-                    ["(none)"] + spag_cols,
-                    key="spag_highlight",
-                )
-                highlight_col = highlight if highlight != "(none)" else None
-
-            show_median = st.checkbox("Show Median + IQR band", key="spag_median")
-
-            palette_name_c = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_c")
-            palette_c = get_palette_colors(palette_name_c, len(spag_cols))
-
-            fig_spag = None
-            try:
-                fig_spag = plot_spaghetti(
-                    working_df, date_col, spag_cols,
-                    alpha=alpha_val,
-                    highlight_col=highlight_col,
-                    top_n=top_n,
-                    show_median_band=show_median,
-                    title="Spaghetti Plot",
-                    style_dict=style_dict,
-                    palette_colors=palette_c,
-                )
-                st.pyplot(fig_spag, use_container_width=True)
-            except Exception as exc:
-                st.error(f"Spaghetti chart error: {exc}")
-
-            # Per-series summary table
-            with st.expander("Per-series Summary", expanded=False):
-                spag_summary = compute_multi_series_summary(
-                    working_df, date_col, spag_cols,
-                )
-                st.dataframe(
-                    spag_summary.style.format({
-                        "mean": "{:,.2f}",
-                        "std": "{:,.2f}",
-                        "min": "{:,.2f}",
-                        "max": "{:,.2f}",
-                        "trend_slope": "{:,.4f}",
-                        "adf_pvalue": "{:.4f}",
-                    }),
-                    use_container_width=True,
-                )
-
-            # AI Interpretation
-            _render_ai_interpretation(
-                fig_spag, "Spaghetti Plot", freq_info,
-                working_df, date_col, ", ".join(spag_cols), "interpret_c",
-            )
+    _spaghetti_chart_fragment(working_df, date_col, y_cols, style_dict)
+    _spaghetti_insights_fragment(working_df, date_col, freq_info)

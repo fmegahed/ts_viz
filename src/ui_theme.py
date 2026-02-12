@@ -102,6 +102,77 @@ def apply_miami_theme() -> None:
             color: {_BLACK};
             font-weight: 700;
         }}
+
+        /* ---- Sidebar developer card ---- */
+        .dev-card {{
+            border: 1px solid {_BORDER_GRAY};
+            border-radius: 8px;
+            padding: 0.75rem;
+            background: {_WHITE};
+        }}
+        .dev-row {{
+            display: flex;
+            gap: 0.6rem;
+            align-items: flex-start;
+        }}
+        .dev-avatar {{
+            width: 42px;
+            height: 42px;
+            min-width: 42px;
+            border-radius: 50%;
+            background: {_LIGHT_GRAY};
+            color: {_BLACK};
+            border: 1px solid {_BORDER_GRAY};
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .dev-avatar svg {{
+            width: 24px;
+            height: 24px;
+            fill: #666;
+        }}
+        .dev-name {{
+            font-weight: 700;
+            color: {_BLACK};
+            font-size: 0.88rem;
+            line-height: 1.3;
+        }}
+        .dev-role {{
+            font-size: 0.74rem;
+            color: #5f6b73;
+            line-height: 1.3;
+            margin-top: 0.1rem;
+        }}
+        .dev-links {{
+            display: flex;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+            margin-top: 0.55rem;
+        }}
+        .dev-link {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.25rem 0.5rem;
+            border: 1px solid #C6C6C6;
+            border-radius: 5px;
+            font-size: 0.73rem;
+            color: #1a1a1a;
+            text-decoration: none;
+            background: {_WHITE};
+            line-height: 1.2;
+            white-space: nowrap;
+        }}
+        .dev-link svg {{
+            width: 13px;
+            height: 13px;
+            fill: currentColor;
+        }}
+        .dev-link:hover {{
+            border-color: {MIAMI_RED};
+            color: {MIAMI_RED};
+        }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
