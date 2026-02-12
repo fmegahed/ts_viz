@@ -305,16 +305,15 @@ with st.sidebar:
         all_cols = list(raw_df.columns)
         default_date_idx = all_cols.index(date_suggestions[0]) if date_suggestions else 0
 
-        date_col = st.selectbox("Date column", all_cols, index=default_date_idx, key="sidebar_date_col")
+        if "sidebar_date_col" not in st.session_state:
+            st.session_state["sidebar_date_col"] = all_cols[default_date_idx]
+        date_col = st.selectbox("Date column", all_cols, key="sidebar_date_col")
 
         remaining = [c for c in all_cols if c != date_col]
         default_y = [c for c in numeric_suggestions if c != date_col]
-        y_cols = st.multiselect(
-            "Value column(s)",
-            remaining,
-            default=default_y[:4] if default_y else [],
-            key="sidebar_y_cols",
-        )
+        if "sidebar_y_cols" not in st.session_state:
+            st.session_state["sidebar_y_cols"] = default_y[:4] if default_y else []
+        y_cols = st.multiselect("Value column(s)", remaining, key="sidebar_y_cols")
 
         st.session_state.date_col = date_col
         st.session_state.y_cols = y_cols
@@ -353,7 +352,6 @@ with st.sidebar:
             # Frequency override
             freq_override = st.text_input(
                 "Override frequency label (optional)",
-                value="",
                 help="e.g. Daily, Weekly, Monthly, Quarterly, Yearly",
                 key="sidebar_freq_override",
             )
@@ -646,12 +644,13 @@ with tab_few:
     else:
         st.subheader("Panel Plot (Small Multiples)")
 
-        panel_cols = st.multiselect(
-            "Columns to plot",
-            y_cols,
-            default=y_cols[:4],
-            key="panel_cols",
-        )
+        if "panel_cols" not in st.session_state:
+            st.session_state["panel_cols"] = y_cols[:4]
+        else:
+            st.session_state["panel_cols"] = [
+                c for c in st.session_state["panel_cols"] if c in y_cols
+            ]
+        panel_cols = st.multiselect("Columns to plot", y_cols, key="panel_cols")
 
         if panel_cols:
             pc1, pc2 = st.columns(2)
@@ -660,7 +659,9 @@ with tab_few:
                     "Chart type", ["line", "bar"], key="panel_chart"
                 )
             with pc2:
-                shared_y = st.checkbox("Shared Y axis", value=True, key="panel_shared")
+                if "panel_shared" not in st.session_state:
+                    st.session_state["panel_shared"] = True
+                shared_y = st.checkbox("Shared Y axis", key="panel_shared")
 
             palette_name_b = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_b")
             palette_b = get_palette_colors(palette_name_b, len(panel_cols))
@@ -711,12 +712,13 @@ with tab_many:
     else:
         st.subheader("Spaghetti Plot")
 
-        spag_cols = st.multiselect(
-            "Columns to include",
-            y_cols,
-            default=y_cols,
-            key="spag_cols",
-        )
+        if "spag_cols" not in st.session_state:
+            st.session_state["spag_cols"] = list(y_cols)
+        else:
+            st.session_state["spag_cols"] = [
+                c for c in st.session_state["spag_cols"] if c in y_cols
+            ]
+        spag_cols = st.multiselect("Columns to include", y_cols, key="spag_cols")
 
         if spag_cols:
             sc1, sc2, sc3 = st.columns(3)
@@ -733,7 +735,7 @@ with tab_many:
                 )
                 highlight_col = highlight if highlight != "(none)" else None
 
-            show_median = st.checkbox("Show Median + IQR band", value=False, key="spag_median")
+            show_median = st.checkbox("Show Median + IQR band", key="spag_median")
 
             palette_name_c = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_c")
             palette_c = get_palette_colors(palette_name_c, len(spag_cols))
