@@ -2,7 +2,7 @@
 QueryChat initialization and filtered DataFrame helpers.
 
 Provides convenience wrappers around the ``querychat`` library for
-natural-language filtering of time-series DataFrames inside a Streamlit
+natural-language filtering of time-series DataFrames inside a Gradio
 app.  All functions degrade gracefully when the package or an API key
 is unavailable.
 """
@@ -13,10 +13,9 @@ import os
 from typing import List, Optional
 
 import pandas as pd
-import streamlit as st
 
 try:
-    from querychat.streamlit import QueryChat as _QueryChat
+    from querychat.gradio import QueryChat as _QueryChat
 
     _QUERYCHAT_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -78,7 +77,7 @@ def create_querychat(
     if not _QUERYCHAT_AVAILABLE:
         raise RuntimeError(
             "The 'querychat' package is not installed. "
-            "Install it with: pip install 'querychat[streamlit]'"
+            "Install it with: pip install 'querychat[gradio]'"
         )
 
     if y_cols is None:
@@ -125,7 +124,7 @@ def create_querychat(
 # Filtered DataFrame extraction
 # ---------------------------------------------------------------------------
 
-def get_filtered_pandas_df(qc) -> pd.DataFrame:
+def get_filtered_pandas_df(qc, state_dict=None) -> pd.DataFrame:
     """Extract the currently filtered DataFrame from a QueryChat instance.
 
     The underlying ``qc.df()`` may return a *narwhals* DataFrame rather
@@ -136,6 +135,9 @@ def get_filtered_pandas_df(qc) -> pd.DataFrame:
     ----------
     qc:
         A QueryChat instance previously created via :func:`create_querychat`.
+    state_dict:
+        The Gradio state dictionary from ``qc.ui()``.  Required for the
+        Gradio variant of QueryChat.
 
     Returns
     -------
@@ -143,11 +145,21 @@ def get_filtered_pandas_df(qc) -> pd.DataFrame:
         The filtered data as a pandas DataFrame.
     """
     try:
-        result = qc.df()
+        if state_dict is not None:
+            result = qc.df(state_dict)
+        else:
+            result = qc.df()
 
         # narwhals (or polars) DataFrames expose .to_pandas()
         if hasattr(result, "to_pandas"):
             return result.to_pandas()
+
+        # narwhals also has .to_native() which may give pandas directly
+        if hasattr(result, "to_native"):
+            native = result.to_native()
+            if isinstance(native, pd.DataFrame):
+                return native
+            return pd.DataFrame(native)
 
         # Already a pandas DataFrame
         if isinstance(result, pd.DataFrame):
@@ -159,7 +171,7 @@ def get_filtered_pandas_df(qc) -> pd.DataFrame:
         # If anything goes wrong, surface the unfiltered data so the app
         # can continue to function.
         try:
-            raw = qc.df()
+            raw = qc.df() if state_dict is None else qc.df(state_dict)
             if isinstance(raw, pd.DataFrame):
                 return raw
         except Exception:  # noqa: BLE001

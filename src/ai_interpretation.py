@@ -7,7 +7,7 @@ Pydantic structured output.
 Provides:
     - Pydantic models for structured chart analysis results
     - Vision-based chart interpretation via OpenAI's GPT-5.2 model
-    - Streamlit rendering of interpretation results
+    - Markdown rendering of interpretation results (framework-agnostic)
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from typing import Literal
 
 import openai
 from pydantic import BaseModel, ConfigDict
-import streamlit as st
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +183,7 @@ def interpret_chart(
 
 
 # ---------------------------------------------------------------------------
-# Streamlit rendering
+# Markdown rendering (framework-agnostic)
 # ---------------------------------------------------------------------------
 
 _DIRECTION_EMOJI = {
@@ -201,69 +200,75 @@ _SEVERITY_COLOR = {
 }
 
 
-def render_interpretation(interp: ChartInterpretation) -> None:
-    """Render a :class:`ChartInterpretation` as a styled Streamlit card.
+def render_interpretation_markdown(interp: ChartInterpretation) -> str:
+    """Render a :class:`ChartInterpretation` as a Markdown string.
 
-    Uses ``st.markdown``, ``st.expander``, and related widgets to lay out
-    the interpretation in an easy-to-read format with sections for trend,
-    seasonality, stationarity, anomalies, key observations, summary, and
-    recommendations.
+    Returns a formatted multi-section Markdown document suitable for
+    display in ``gr.Markdown`` or any other Markdown renderer.
     """
+    lines: list[str] = []
 
-    st.markdown("### AI Chart Interpretation")
-    st.markdown(
-        f"**Detected chart type:** {interp.chart_type_detected}"
-    )
+    lines.append("### AI Chart Interpretation")
+    lines.append(f"**Detected chart type:** {interp.chart_type_detected}")
+    lines.append("")
 
     # ---- Summary ----------------------------------------------------------
-    st.markdown("---")
-    st.markdown(f"**Summary:** {interp.summary}")
+    lines.append("---")
+    lines.append(f"**Summary:** {interp.summary}")
+    lines.append("")
 
     # ---- Key observations -------------------------------------------------
-    with st.expander("Key Observations", expanded=True):
-        for obs in interp.key_observations:
-            st.markdown(f"- {obs}")
+    lines.append("#### Key Observations")
+    for obs in interp.key_observations:
+        lines.append(f"- {obs}")
+    lines.append("")
 
     # ---- Trend ------------------------------------------------------------
-    with st.expander("Trend Analysis"):
-        arrow = _DIRECTION_EMOJI.get(interp.trend.direction, "")
-        st.markdown(
-            f"**Direction:** {interp.trend.direction.capitalize()} {arrow}"
-        )
-        st.markdown(interp.trend.description)
+    lines.append("#### Trend Analysis")
+    arrow = _DIRECTION_EMOJI.get(interp.trend.direction, "")
+    lines.append(f"**Direction:** {interp.trend.direction.capitalize()} {arrow}")
+    lines.append("")
+    lines.append(interp.trend.description)
+    lines.append("")
 
     # ---- Seasonality ------------------------------------------------------
-    with st.expander("Seasonality"):
-        status = "Detected" if interp.seasonality.detected else "Not detected"
-        st.markdown(f"**Status:** {status}")
-        if interp.seasonality.period:
-            st.markdown(f"**Period:** {interp.seasonality.period}")
-        st.markdown(interp.seasonality.description)
+    lines.append("#### Seasonality")
+    status = "Detected" if interp.seasonality.detected else "Not detected"
+    lines.append(f"**Status:** {status}")
+    if interp.seasonality.period:
+        lines.append(f"**Period:** {interp.seasonality.period}")
+    lines.append("")
+    lines.append(interp.seasonality.description)
+    lines.append("")
 
     # ---- Stationarity -----------------------------------------------------
-    with st.expander("Stationarity"):
-        label = (
-            "Likely stationary"
-            if interp.stationarity.likely_stationary
-            else "Likely non-stationary"
-        )
-        st.markdown(f"**Assessment:** {label}")
-        st.markdown(interp.stationarity.description)
+    lines.append("#### Stationarity")
+    label = (
+        "Likely stationary"
+        if interp.stationarity.likely_stationary
+        else "Likely non-stationary"
+    )
+    lines.append(f"**Assessment:** {label}")
+    lines.append("")
+    lines.append(interp.stationarity.description)
+    lines.append("")
 
     # ---- Anomalies --------------------------------------------------------
-    with st.expander("Anomalies"):
-        if not interp.anomalies:
-            st.markdown("No anomalies detected.")
-        else:
-            for anomaly in interp.anomalies:
-                color = _SEVERITY_COLOR.get(anomaly.severity, "gray")
-                st.markdown(
-                    f"- **[{anomaly.approximate_location}]** "
-                    f":{color}[{anomaly.severity.upper()}] "
-                    f"-- {anomaly.description}"
-                )
+    lines.append("#### Anomalies")
+    if not interp.anomalies:
+        lines.append("No anomalies detected.")
+    else:
+        for anomaly in interp.anomalies:
+            lines.append(
+                f"- **[{anomaly.approximate_location}]** "
+                f"*{anomaly.severity.upper()}* "
+                f"-- {anomaly.description}"
+            )
+    lines.append("")
 
     # ---- Recommendations --------------------------------------------------
-    with st.expander("Recommended Next Steps"):
-        for rec in interp.recommendations:
-            st.markdown(f"1. {rec}")
+    lines.append("#### Recommended Next Steps")
+    for i, rec in enumerate(interp.recommendations, 1):
+        lines.append(f"{i}. {rec}")
+
+    return "\n".join(lines)

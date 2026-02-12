@@ -10,7 +10,7 @@ pinned: false
 
 # Time Series Visualizer + AI Chart Interpreter
 
-A Streamlit app for Miami University Business Analytics students to upload CSV
+A Gradio app for Miami University Business Analytics students to upload CSV
 time-series data, create publication-quality charts, and get AI-powered chart
 interpretation.
 

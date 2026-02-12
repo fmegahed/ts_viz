@@ -18,9 +18,7 @@ COPY --chown=user:user . .
 
 EXPOSE 7860
 
-CMD ["streamlit", "run", "app.py", \
-     "--server.port=7860", \
-     "--server.address=0.0.0.0", \
-     "--server.enableXsrfProtection=false", \
-     "--server.enableCORS=false", \
-     "--browser.gatherUsageStats=false"]
+ENV GRADIO_SERVER_NAME="0.0.0.0"
+ENV GRADIO_SERVER_PORT="7860"
+
+CMD ["python", "app.py"]

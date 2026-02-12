@@ -1,10 +1,11 @@
 """
 ui_theme.py
 -----------
-Miami University branded theme and styling utilities for Streamlit apps.
+Miami University branded theme and styling utilities.
 
 Provides:
-    - CSS injection for Streamlit components (buttons, sidebar, metrics, cards)
+    - Gradio theme subclass (MiamiTheme) with Miami branding
+    - Custom CSS string for elements beyond theme control
     - Matplotlib rcParams styled with Miami branding
     - ColorBrewer palette loading via palettable with graceful fallback
     - Color-swatch preview figure generation
@@ -15,9 +16,11 @@ from __future__ import annotations
 import itertools
 from typing import Dict, List, Optional
 
+import gradio as gr
+from gradio.themes.base import Base
+from gradio.themes.utils import colors, fonts, sizes
 import matplotlib.figure
 import matplotlib.pyplot as plt
-import streamlit as st
 
 # ---------------------------------------------------------------------------
 # Brand constants — Miami University (Ohio) official palette
@@ -36,139 +39,197 @@ _HOVER_RED = "#9E0E26"
 
 
 # ---------------------------------------------------------------------------
-# Streamlit CSS injection
+# Gradio theme
 # ---------------------------------------------------------------------------
-def apply_miami_theme() -> None:
-    """Inject Miami-branded CSS into the active Streamlit page.
 
-    Styles affected:
-        * Primary buttons  -- Miami Red background with white text
-        * Card containers  -- subtle border and rounded corners
-        * Sidebar header   -- Miami Red accent bar
-        * Metric cards     -- light background with left red accent
+_miami_red_palette = colors.Color(
+    c50="#fff5f6",
+    c100="#ffe0e4",
+    c200="#ffc7ce",
+    c300="#ffa3ad",
+    c400="#ff6b7d",
+    c500="#C41230",
+    c600="#a30f27",
+    c700="#850c1f",
+    c800="#6b0a19",
+    c900="#520714",
+    c950="#3d0510",
+    name="miami_red",
+)
+
+
+class MiamiTheme(Base):
+    """Gradio theme subclass with Miami University branding."""
+
+    def __init__(self, **kwargs):
+        super().__init__(
+            primary_hue=_miami_red_palette,
+            secondary_hue=colors.gray,
+            neutral_hue=colors.gray,
+            spacing_size=sizes.spacing_md,
+            radius_size=sizes.radius_sm,
+            text_size=sizes.text_md,
+            font=(
+                fonts.GoogleFont("Source Sans Pro"),
+                fonts.Font("ui-sans-serif"),
+                fonts.Font("system-ui"),
+                fonts.Font("sans-serif"),
+            ),
+            font_mono=(
+                fonts.Font("ui-monospace"),
+                fonts.Font("SFMono-Regular"),
+                fonts.Font("monospace"),
+            ),
+            **kwargs,
+        )
+        super().set(
+            # Buttons
+            button_primary_background_fill="*primary_500",
+            button_primary_background_fill_hover="*primary_700",
+            button_primary_text_color="white",
+            button_primary_border_color="*primary_500",
+            # Block titles
+            block_title_text_weight="600",
+            block_title_text_color="*primary_500",
+            # Body
+            body_text_color="*neutral_900",
+            # Sidebar accent
+            block_border_width="1px",
+            block_border_color="*neutral_200",
+            # Checkbox / Radio
+            checkbox_background_color_selected="*primary_500",
+            checkbox_border_color_selected="*primary_500",
+        )
+
+
+def get_miami_css() -> str:
+    """Return custom CSS for elements that ``gr.themes.Base`` cannot control.
+
+    This string is passed to ``gr.Blocks(css=...)`` alongside the
+    :class:`MiamiTheme`.
     """
-    css = f"""
-    <style>
-        /* ---- Primary buttons ---- */
-        .stButton > button[kind="primary"],
-        .stButton > button {{
-            background-color: {MIAMI_RED};
-            color: {_WHITE};
-            border: none;
-            border-radius: 6px;
-            padding: 0.5rem 1.25rem;
-            font-weight: 600;
-            transition: background-color 0.2s ease;
-        }}
-        .stButton > button:hover {{
-            background-color: {_HOVER_RED};
-            color: {_WHITE};
-            border: none;
-        }}
-        .stButton > button:active,
-        .stButton > button:focus {{
-            background-color: {_HOVER_RED};
-            color: {_WHITE};
-            box-shadow: none;
-        }}
+    return f"""
+    /* ---- Sidebar header accent ---- */
+    .sidebar > .panel {{
+        border-top: 4px solid {MIAMI_RED} !important;
+    }}
 
-        /* ---- Expander card borders (box-shadow to avoid layout shift) ---- */
-        div[data-testid="stExpander"] {{
-            box-shadow: 0 0 0 1px {_BORDER_GRAY};
-            border-radius: 8px;
-        }}
+    /* ---- Developer card ---- */
+    .dev-card {{
+        padding: 0;
+        background: transparent;
+    }}
+    .dev-row {{
+        display: flex;
+        gap: 0.5rem;
+        align-items: flex-start;
+    }}
+    .dev-avatar {{
+        width: 28px;
+        height: 28px;
+        min-width: 28px;
+        fill: {_BLACK};
+    }}
+    .dev-name {{
+        font-weight: 600;
+        color: {_BLACK};
+        font-size: 0.82rem;
+        line-height: 1.3;
+    }}
+    .dev-role {{
+        font-size: 0.7rem;
+        color: #6c757d;
+        line-height: 1.3;
+    }}
+    .dev-links {{
+        display: flex;
+        gap: 0.3rem;
+        flex-wrap: wrap;
+        margin-top: 0.35rem;
+    }}
+    .dev-link,
+    .dev-link:visited,
+    .dev-link:link {{
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
+        padding: 0.15rem 0.4rem;
+        border: 1px solid {MIAMI_RED};
+        border-radius: 4px;
+        font-size: 0.65rem;
+        color: {MIAMI_RED} !important;
+        text-decoration: none;
+        background: {_WHITE};
+        line-height: 1.4;
+        white-space: nowrap;
+    }}
+    .dev-link svg {{
+        width: 11px;
+        height: 11px;
+        fill: {MIAMI_RED};
+    }}
+    .dev-link:hover {{
+        background-color: {MIAMI_RED};
+        color: {_WHITE} !important;
+    }}
+    .dev-link:hover svg {{
+        fill: {_WHITE};
+    }}
 
-        /* ---- Sidebar header accent ---- */
-        section[data-testid="stSidebar"] > div:first-child {{
-            border-top: 4px solid {MIAMI_RED};
-        }}
-        section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3 {{
-            color: {MIAMI_RED};
-        }}
+    /* ---- Metric-like stat cards ---- */
+    .stat-card {{
+        background-color: {_LIGHT_GRAY};
+        box-shadow: inset 4px 0 0 0 {MIAMI_RED};
+        border-radius: 6px;
+        padding: 0.6rem 0.75rem 0.6rem 1rem;
+    }}
+    .stat-card .stat-label {{
+        color: {_BLACK};
+        font-size: 0.78rem;
+    }}
+    .stat-card .stat-value {{
+        color: {_BLACK};
+        font-weight: 700;
+        font-size: 0.95rem;
+    }}
 
-        /* ---- Metric cards (inset shadow for left accent, no layout impact) ---- */
-        div[data-testid="stMetric"] {{
-            background-color: {_LIGHT_GRAY};
-            box-shadow: inset 4px 0 0 0 {MIAMI_RED};
-            border-radius: 6px;
-            padding: 0.6rem 0.75rem 0.6rem 1rem;
-        }}
-        div[data-testid="stMetric"] label {{
-            color: {_BLACK};
-            font-size: 0.78rem;
-        }}
-        div[data-testid="stMetric"] div[data-testid="stMetricValue"] {{
-            color: {_BLACK};
-            font-weight: 700;
-            font-size: 0.95rem;
-        }}
+    /* ---- Step cards on welcome screen ---- */
+    .step-card {{
+        background: {_LIGHT_GRAY};
+        border-radius: 8px;
+        padding: 1rem;
+        border-left: 4px solid {MIAMI_RED};
+        height: 100%;
+    }}
+    .step-card .step-number {{
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: {MIAMI_RED};
+    }}
+    .step-card .step-title {{
+        font-weight: 600;
+        margin: 0.3rem 0 0.2rem;
+    }}
+    .step-card .step-desc {{
+        font-size: 0.82rem;
+        color: #444;
+    }}
 
-        /* ---- Sidebar developer card ---- */
-        .dev-card {{
-            padding: 0;
-            background: transparent;
-        }}
-        .dev-row {{
-            display: flex;
-            gap: 0.5rem;
-            align-items: flex-start;
-        }}
-        .dev-avatar {{
-            width: 28px;
-            height: 28px;
-            min-width: 28px;
-            fill: {_BLACK};
-        }}
-        .dev-name {{
-            font-weight: 600;
-            color: {_BLACK};
-            font-size: 0.82rem;
-            line-height: 1.3;
-        }}
-        .dev-role {{
-            font-size: 0.7rem;
-            color: #6c757d;
-            line-height: 1.3;
-        }}
-        .dev-links {{
-            display: flex;
-            gap: 0.3rem;
-            flex-wrap: wrap;
-            margin-top: 0.35rem;
-        }}
-        .dev-link,
-        .dev-link:visited,
-        .dev-link:link {{
-            display: inline-flex;
-            align-items: center;
-            gap: 0.2rem;
-            padding: 0.15rem 0.4rem;
-            border: 1px solid {MIAMI_RED};
-            border-radius: 4px;
-            font-size: 0.65rem;
-            color: {MIAMI_RED} !important;
-            text-decoration: none;
-            background: {_WHITE};
-            line-height: 1.4;
-            white-space: nowrap;
-        }}
-        .dev-link svg {{
-            width: 11px;
-            height: 11px;
-            fill: {MIAMI_RED};
-        }}
-        .dev-link:hover {{
-            background-color: {MIAMI_RED};
-            color: {_WHITE} !important;
-        }}
-        .dev-link:hover svg {{
-            fill: {_WHITE};
-        }}
-    </style>
+    /* ---- App title in sidebar ---- */
+    .app-title {{
+        text-align: center;
+        margin-bottom: 0.5rem;
+    }}
+    .app-title .title-text {{
+        font-size: 1.6rem;
+        font-weight: 800;
+        color: {MIAMI_RED};
+    }}
+    .app-title .subtitle-text {{
+        font-size: 0.82rem;
+        color: {_BLACK};
+    }}
     """
-    st.markdown(css, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +420,7 @@ def render_palette_preview(
     Returns
     -------
     matplotlib.figure.Figure
-        A Figure instance ready to be passed to ``st.pyplot()`` or saved.
+        A Figure instance ready to be passed to ``gr.Plot`` or saved.
     """
     n = len(colors)
     fig_width = max(swatch_width * n, 2.0)
@@ -384,5 +445,5 @@ def render_palette_preview(
     ax.set_aspect("equal")
     ax.axis("off")
     fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    plt.close(fig)  # prevent display in non-Streamlit contexts
+    plt.close(fig)  # prevent display in non-Gradio contexts
     return fig
