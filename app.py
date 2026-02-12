@@ -159,7 +159,7 @@ def _render_cleaning_report(report: CleaningReport) -> None:
 
 
 def _render_summary_stats(stats) -> None:
-    """Render SummaryStats as metric cards + expander."""
+    """Render SummaryStats as metric cards (flat, no nesting)."""
     row1 = st.columns(4)
     row1[0].metric("Count", f"{stats.count:,}")
     row1[1].metric("Missing", f"{stats.missing_count} ({stats.missing_pct:.1f}%)")
@@ -172,32 +172,58 @@ def _render_summary_stats(stats) -> None:
     row2[2].metric("Median", f"{stats.median_val:,.2f}")
     row2[3].metric("75th %ile / Max", f"{stats.p75:,.2f} / {stats.max_val:,.2f}")
 
-    with st.expander("Trend & Stationarity"):
-        tc1, tc2 = st.columns(2)
-        tc1.metric(
-            "Trend slope (per period)",
-            f"{stats.trend_slope:,.4f}" if pd.notna(stats.trend_slope) else "N/A",
-            help="Slope from OLS on a numeric index.",
-        )
-        tc2.metric(
-            "Trend p-value",
-            f"{stats.trend_pvalue:.4f}" if pd.notna(stats.trend_pvalue) else "N/A",
-        )
-        ac1, ac2 = st.columns(2)
-        ac1.metric(
-            "ADF statistic",
-            f"{stats.adf_statistic:.4f}" if pd.notna(stats.adf_statistic) else "N/A",
-            help="Augmented Dickey-Fuller test statistic.",
-        )
-        ac2.metric(
-            "ADF p-value",
-            f"{stats.adf_pvalue:.4f}" if pd.notna(stats.adf_pvalue) else "N/A",
-            help="p < 0.05 suggests the series is stationary.",
-        )
+    row3 = st.columns(4)
+    row3[0].metric(
+        "Trend slope",
+        f"{stats.trend_slope:,.4f}" if pd.notna(stats.trend_slope) else "N/A",
+        help="Slope from OLS on a numeric index.",
+    )
+    row3[1].metric(
+        "Trend p-value",
+        f"{stats.trend_pvalue:.4f}" if pd.notna(stats.trend_pvalue) else "N/A",
+    )
+    row3[2].metric(
+        "ADF statistic",
+        f"{stats.adf_statistic:.4f}" if pd.notna(stats.adf_statistic) else "N/A",
+        help="Augmented Dickey-Fuller test statistic.",
+    )
+    row3[3].metric(
+        "ADF p-value",
+        f"{stats.adf_pvalue:.4f}" if pd.notna(stats.adf_pvalue) else "N/A",
+        help="p < 0.05 suggests the series is stationary.",
+    )
+    st.caption(
+        f"Date range: {stats.date_start.date()} to {stats.date_end.date()} "
+        f"({stats.date_span_days:,} days)"
+    )
+
+
+def _render_ai_interpretation(fig, chart_type_label, freq_info, df_plot,
+                               date_col, y_label, button_key):
+    """Reusable AI Chart Interpretation block for any tab."""
+    with st.expander("AI Chart Interpretation", expanded=False):
         st.caption(
-            f"Date range: {stats.date_start.date()} to {stats.date_end.date()} "
-            f"({stats.date_span_days:,} days)"
+            "The chart image (PNG) is sent to OpenAI for interpretation. "
+            "Do not include sensitive data in your charts."
         )
+        if not check_api_key_available():
+            st.warning("Set `OPENAI_API_KEY` to enable AI interpretation.")
+        elif fig is not None:
+            if st.button("Interpret Chart with AI", key=button_key):
+                with st.spinner("Analyzing chart..."):
+                    png = fig_to_png_bytes(fig)
+                    date_range_str = (
+                        f"{df_plot[date_col].min().date()} to "
+                        f"{df_plot[date_col].max().date()}"
+                    )
+                    metadata = {
+                        "chart_type": chart_type_label,
+                        "frequency_label": freq_info.label if freq_info else "Unknown",
+                        "date_range": date_range_str,
+                        "y_column": y_label,
+                    }
+                    interp = interpret_chart(png, metadata)
+                    render_interpretation(interp)
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +243,7 @@ style_dict = get_miami_mpl_style()
 for key in [
     "raw_df", "cleaned_df", "cleaning_report", "freq_info",
     "date_col", "y_cols", "qc", "qc_hash",
-    "_upload_id", "_upload_delim", "cleaned_df_hash",
+    "_upload_id", "_upload_delim", "_clean_key",
 ]:
     if key not in st.session_state:
         st.session_state[key] = None
@@ -306,16 +332,21 @@ with st.sidebar:
             key="sidebar_missing_action",
         )
 
-        # Clean
+        # Clean — only recompute and write session_state when inputs change
         if y_cols:
-            cleaned_df, report, freq_info = _clean_pipeline(
-                _df_hash(raw_df), raw_df, date_col, tuple(y_cols),
-                dup_action, missing_action,
-            )
-            st.session_state.cleaned_df = cleaned_df
-            st.session_state.cleaning_report = report
-            st.session_state.freq_info = freq_info
+            _key = (date_col, tuple(y_cols), dup_action, missing_action,
+                    st.session_state._upload_id)
+            if st.session_state.get("_clean_key") != _key:
+                cleaned_df, report, freq_info = _clean_pipeline(
+                    _df_hash(raw_df), raw_df, date_col, tuple(y_cols),
+                    dup_action, missing_action,
+                )
+                st.session_state.cleaned_df = cleaned_df
+                st.session_state.cleaning_report = report
+                st.session_state.freq_info = freq_info
+                st.session_state._clean_key = _key
 
+            freq_info = st.session_state.freq_info
             st.caption(f"Frequency: **{freq_info.label}** "
                        f"({'regular' if freq_info.is_regular else 'irregular'})")
 
@@ -602,29 +633,9 @@ with tab_single:
         _render_summary_stats(stats)
 
     # ---- AI Interpretation ------------------------------------------------
-    with st.expander("AI Chart Interpretation", expanded=False):
-        st.caption(
-            "The chart image (PNG) is sent to OpenAI for interpretation. "
-            "Do not include sensitive data in your charts."
-        )
-        if not check_api_key_available():
-            st.warning("Set `OPENAI_API_KEY` to enable AI interpretation.")
-        elif fig is not None:
-            if st.button("Interpret Chart with AI", key="interpret_a"):
-                with st.spinner("Analyzing chart..."):
-                    png = fig_to_png_bytes(fig)
-                    date_range_str = (
-                        f"{df_plot[date_col].min().date()} to "
-                        f"{df_plot[date_col].max().date()}"
-                    )
-                    metadata = {
-                        "chart_type": chart_type,
-                        "frequency_label": freq_info.label if freq_info else "Unknown",
-                        "date_range": date_range_str,
-                        "y_column": active_y,
-                    }
-                    interp = interpret_chart(png, metadata)
-                    render_interpretation(interp)
+    _render_ai_interpretation(
+        fig, chart_type, freq_info, df_plot, date_col, active_y, "interpret_a",
+    )
 
 # ===================================================================
 # Tab B — Few Series (Panel)
@@ -654,6 +665,7 @@ with tab_few:
             palette_name_b = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_b")
             palette_b = get_palette_colors(palette_name_b, len(panel_cols))
 
+            fig_panel = None
             try:
                 fig_panel = plot_panel(
                     working_df, date_col, panel_cols,
@@ -683,6 +695,12 @@ with tab_few:
                     }),
                     use_container_width=True,
                 )
+
+            # AI Interpretation
+            _render_ai_interpretation(
+                fig_panel, f"Panel ({panel_chart})", freq_info,
+                working_df, date_col, ", ".join(panel_cols), "interpret_b",
+            )
 
 # ===================================================================
 # Tab C — Many Series (Spaghetti)
@@ -720,6 +738,7 @@ with tab_many:
             palette_name_c = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_c")
             palette_c = get_palette_colors(palette_name_c, len(spag_cols))
 
+            fig_spag = None
             try:
                 fig_spag = plot_spaghetti(
                     working_df, date_col, spag_cols,
@@ -734,3 +753,26 @@ with tab_many:
                 st.pyplot(fig_spag, use_container_width=True)
             except Exception as exc:
                 st.error(f"Spaghetti chart error: {exc}")
+
+            # Per-series summary table
+            with st.expander("Per-series Summary", expanded=False):
+                spag_summary = compute_multi_series_summary(
+                    working_df, date_col, spag_cols,
+                )
+                st.dataframe(
+                    spag_summary.style.format({
+                        "mean": "{:,.2f}",
+                        "std": "{:,.2f}",
+                        "min": "{:,.2f}",
+                        "max": "{:,.2f}",
+                        "trend_slope": "{:,.4f}",
+                        "adf_pvalue": "{:.4f}",
+                    }),
+                    use_container_width=True,
+                )
+
+            # AI Interpretation
+            _render_ai_interpretation(
+                fig_spag, "Spaghetti Plot", freq_info,
+                working_df, date_col, ", ".join(spag_cols), "interpret_c",
+            )
