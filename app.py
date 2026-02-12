@@ -94,6 +94,14 @@ _CHART_TYPES = [
 ]
 
 _PALETTE_NAMES = ["Set2", "Dark2", "Set1", "Paired", "Pastel1", "Pastel2", "Accent"]
+_VIEW_SPECS = [
+    ("Single Series", "single"),
+    ("Few Series (Panel)", "panel"),
+    ("Many Series (Spaghetti)", "spaghetti"),
+]
+_VIEW_LABELS = [label for label, _ in _VIEW_SPECS]
+_VIEW_SLUG_BY_LABEL = dict(_VIEW_SPECS)
+_VIEW_LABEL_BY_SLUG = {slug: label for label, slug in _VIEW_SPECS}
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +117,34 @@ def _df_hash(df: pd.DataFrame) -> str:
 
 def _load_demo(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
+
+
+def _scalar_query_param(value):
+    """Return the first item for multi-valued query params."""
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
+
+
+def _initial_view_label() -> str:
+    """Resolve initial view from query params when available."""
+    requested = _scalar_query_param(st.query_params.get("view"))
+    return _VIEW_LABEL_BY_SLUG.get(requested, _VIEW_LABELS[0])
+
+
+def _reset_all_state() -> None:
+    """Clear all session/query state and rerun."""
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.query_params.clear()
+    st.rerun()
+
+
+def _sync_view_query_param() -> None:
+    """Write current active view to URL query params."""
+    active = st.session_state.get("active_view")
+    if active in _VIEW_SLUG_BY_LABEL:
+        st.query_params["view"] = _VIEW_SLUG_BY_LABEL[active]
 
 
 @st.cache_data(show_spinner=False)
@@ -720,6 +756,8 @@ with st.sidebar:
         ["(none)"] + list(_DEMO_FILES.keys()),
         key="demo_select",
     )
+    if st.button("Reset all", key="reset_sidebar", use_container_width=True):
+        _reset_all_state()
 
     # Load data
     def _on_new_data(df: pd.DataFrame) -> None:
@@ -921,13 +959,6 @@ with st.sidebar:
                     "(natural-language data filtering)."
                 )
 
-        # Reset button
-        st.divider()
-        if st.button("Reset all"):
-            for k in list(st.session_state.keys()):
-                del st.session_state[k]
-            st.rerun()
-
     st.divider()
     st.caption(
         "**Privacy:** All processing is in-memory. "
@@ -1037,31 +1068,42 @@ else:
 _data_quality_fragment(report)
 
 # ---------------------------------------------------------------------------
-# Tabs
+# View selector
 # ---------------------------------------------------------------------------
-tab_single, tab_few, tab_many = st.tabs([
-    "Single Series",
-    "Few Series (Panel)",
-    "Many Series (Spaghetti)",
-])
+if "active_view" not in st.session_state:
+    st.session_state["active_view"] = _initial_view_label()
+
+view_col, reset_col = st.columns([6, 1])
+with view_col:
+    active_view = st.radio(
+        "View",
+        _VIEW_LABELS,
+        key="active_view",
+        horizontal=True,
+        label_visibility="collapsed",
+        on_change=_sync_view_query_param,
+    )
+with reset_col:
+    if st.button("Reset all", key="reset_main", use_container_width=True):
+        _reset_all_state()
 
 # ===================================================================
 # Tab A — Single Series
 # ===================================================================
-with tab_single:
+if active_view == "Single Series":
     _single_chart_fragment(working_df, date_col, y_cols, freq_info, style_dict)
     _single_insights_fragment(freq_info, date_col)
 
 # ===================================================================
 # Tab B — Few Series (Panel)
 # ===================================================================
-with tab_few:
+elif active_view == "Few Series (Panel)":
     _panel_chart_fragment(working_df, date_col, y_cols, style_dict)
     _panel_insights_fragment(working_df, date_col, freq_info)
 
 # ===================================================================
 # Tab C — Many Series (Spaghetti)
 # ===================================================================
-with tab_many:
+else:
     _spaghetti_chart_fragment(working_df, date_col, y_cols, style_dict)
     _spaghetti_insights_fragment(working_df, date_col, freq_info)
