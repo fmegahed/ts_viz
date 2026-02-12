@@ -72,11 +72,10 @@ def apply_miami_theme() -> None:
             box-shadow: none;
         }}
 
-        /* ---- Expander card borders ---- */
+        /* ---- Expander card borders (box-shadow to avoid layout shift) ---- */
         div[data-testid="stExpander"] {{
-            border: 1px solid {_BORDER_GRAY};
+            box-shadow: 0 0 0 1px {_BORDER_GRAY};
             border-radius: 8px;
-            padding: 0.75rem;
         }}
 
         /* ---- Sidebar header accent ---- */
@@ -89,12 +88,11 @@ def apply_miami_theme() -> None:
             color: {MIAMI_RED};
         }}
 
-        /* ---- Metric cards ---- */
+        /* ---- Metric cards (inset shadow for left accent, no layout impact) ---- */
         div[data-testid="stMetric"] {{
             background-color: {_LIGHT_GRAY};
-            border-left: 4px solid {MIAMI_RED};
+            box-shadow: inset 4px 0 0 0 {MIAMI_RED};
             border-radius: 6px;
-            padding: 0.75rem 1rem;
         }}
         div[data-testid="stMetric"] label {{
             color: {_BLACK};

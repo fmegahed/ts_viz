@@ -392,7 +392,9 @@ if cleaned_df is None or not y_cols:
 # If QueryChat is active, use its filtered df
 if st.session_state.qc is not None:
     working_df = get_filtered_pandas_df(st.session_state.qc)
-    if working_df.empty:
+    # Fall back if filtered df is empty or missing expected columns
+    required = {date_col} | set(y_cols)
+    if working_df.empty or not required.issubset(working_df.columns):
         working_df = cleaned_df
 else:
     working_df = cleaned_df
