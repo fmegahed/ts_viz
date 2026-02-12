@@ -98,6 +98,10 @@ _CHART_TYPES = [
 
 _PALETTE_NAMES = ["Set2", "Dark2", "Set1", "Paired", "Pastel1", "Pastel2", "Accent"]
 _STYLE_DICT = get_miami_mpl_style()
+_MODE_SINGLE = "Single Series"
+_MODE_PANEL = "Compare Few (Panel)"
+_MODE_SPAG = "Compare Many (Spaghetti)"
+_DATE_HINT_TOKENS = ("date", "time", "year", "month", "day", "period")
 
 # ---------------------------------------------------------------------------
 # State helpers
@@ -116,6 +120,8 @@ def _make_empty_state() -> dict:
         "panel_png": None,
         "spag_png": None,
         "qc": None,
+        "mode_choices": [_MODE_SINGLE],
+        "recommended_mode": _MODE_SINGLE,
     }
 
 
@@ -181,6 +187,222 @@ def _format_multi_summary_md(summary_df: pd.DataFrame) -> str:
             f"{slope} | {adf} |"
         )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# UX helpers
+# ---------------------------------------------------------------------------
+
+def _preview_df(df: pd.DataFrame, n: int = 10) -> pd.DataFrame:
+    return df.head(n).copy()
+
+
+def _format_sidebar_status_md(df: pd.DataFrame | None, date_col: str | None = None,
+                              data_format: str | None = None, y_count: int | None = None,
+                              freq_label: str | None = None, cleaned_rows: int | None = None) -> str:
+    if df is None:
+        return "*No data loaded yet.*"
+
+    row_count = cleaned_rows if cleaned_rows is not None else len(df)
+    col_count = len(df.columns)
+    parts = [
+        "### Dataset Status",
+        f"- Rows: **{row_count:,}**",
+        f"- Columns: **{col_count}**",
+    ]
+    if date_col:
+        parts.append(f"- Date column: **{date_col}**")
+    if data_format:
+        parts.append(f"- Structure: **{data_format}**")
+    if y_count is not None:
+        parts.append(f"- Value series selected: **{y_count}**")
+    if freq_label:
+        parts.append(f"- Frequency: **{freq_label}**")
+    return "\n".join(parts)
+
+
+def _format_raw_profile_md(df: pd.DataFrame, date_col: str, data_format: str,
+                           y_cols: list[str]) -> str:
+    numeric_cols = int(df.select_dtypes(include=[np.number]).shape[1])
+    object_cols = int(df.select_dtypes(include=["object"]).shape[1])
+    return "\n".join([
+        "### Dataset Profile",
+        "| Metric | Value |",
+        "|:--|:--|",
+        f"| Rows | {len(df):,} |",
+        f"| Columns | {len(df.columns)} |",
+        f"| Suggested date column | {date_col} |",
+        f"| Detected structure | {data_format} |",
+        f"| Numeric columns | {numeric_cols} |",
+        f"| Text columns | {object_cols} |",
+        f"| Value series selected | {len(y_cols)} |",
+    ])
+
+
+def _get_mode_config(y_count: int) -> tuple[list[str], str, str]:
+    if y_count <= 1:
+        return (
+            [_MODE_SINGLE],
+            _MODE_SINGLE,
+            "Single series detected. Multi-series comparison modes are hidden.",
+        )
+
+    if y_count <= 8:
+        return (
+            [_MODE_SINGLE, _MODE_PANEL],
+            _MODE_PANEL,
+            "Best fit: compare a few series in panel view. Spaghetti is hidden to reduce clutter.",
+        )
+
+    return (
+        [_MODE_SINGLE, _MODE_PANEL, _MODE_SPAG],
+        _MODE_SPAG,
+        "Many series detected. Spaghetti is the recommended default.",
+    )
+
+
+def _chart_availability(df_plot: pd.DataFrame, date_col: str, y_col: str,
+                        freq_info: FrequencyInfo | None) -> dict[str, str]:
+    blocked: dict[str, str] = {}
+
+    if y_col not in df_plot.columns:
+        return {name: "Value column not found in active data." for name in _CHART_TYPES}
+
+    n_obs = int(df_plot[y_col].dropna().shape[0])
+    if n_obs <= 1:
+        return {name: "Need at least 2 non-missing observations." for name in _CHART_TYPES}
+
+    date_series = pd.to_datetime(df_plot[date_col], errors="coerce").dropna()
+    span_days = int((date_series.max() - date_series.min()).days) if len(date_series) >= 2 else 0
+    has_time_features = "month" in df_plot.columns
+    freq_label = freq_info.label if freq_info else "Unknown"
+    period_map = {"Monthly": 12, "Quarterly": 4, "Weekly": 52, "Daily": 365}
+    period = period_map.get(freq_label)
+
+    if not has_time_features:
+        blocked["Line – Colored Markers"] = "Calendar features unavailable."
+        blocked["Seasonal Plot"] = "Calendar features unavailable."
+        blocked["Seasonal Sub-series"] = "Calendar features unavailable."
+
+    if has_time_features and n_obs < 12:
+        blocked["Seasonal Plot"] = "Need at least 12 observations."
+        blocked["Seasonal Sub-series"] = "Need at least 12 observations."
+
+    if n_obs < 8:
+        blocked["ACF / PACF"] = "Need at least 8 observations."
+
+    if period is None:
+        blocked["Decomposition"] = "Requires Daily/Weekly/Monthly/Quarterly frequency."
+    elif n_obs < max(8, period * 2):
+        blocked["Decomposition"] = f"Need at least {max(8, period * 2)} observations."
+
+    if span_days < 365:
+        blocked["Year-over-Year Change"] = "Need at least one year of coverage."
+
+    if n_obs < 3:
+        blocked["Lag Plot"] = "Need at least 3 observations."
+
+    return blocked
+
+
+def _available_chart_choices(df_plot: pd.DataFrame, date_col: str, y_col: str,
+                             freq_info: FrequencyInfo | None) -> tuple[list[str], str]:
+    blocked = _chart_availability(df_plot, date_col, y_col, freq_info)
+    available = [name for name in _CHART_TYPES if name not in blocked]
+    if not available:
+        available = ["Line with Markers"]
+    notes = ["**Chart availability (auto-gated):**"]
+    if blocked:
+        for chart_name, reason in blocked.items():
+            notes.append(f"- {chart_name}: {reason}")
+    else:
+        notes.append("- All chart types are available.")
+    return available, "\n".join(notes)
+
+
+def _mode_visibility(mode: str) -> tuple[bool, bool, bool]:
+    return (
+        mode == _MODE_SINGLE,
+        mode == _MODE_PANEL,
+        mode == _MODE_SPAG,
+    )
+
+
+def _choose_default_date_col(df: pd.DataFrame) -> str | None:
+    cols = list(df.columns)
+    if not cols:
+        return None
+
+    for col in cols:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            return col
+
+    for col in cols:
+        name = str(col).lower()
+        if any(tok in name for tok in _DATE_HINT_TOKENS):
+            return col
+
+    suggestions = suggest_date_columns(df)
+    if suggestions:
+        return suggestions[0]
+    return cols[0]
+
+
+def _derive_setup_options(df: pd.DataFrame, date_col: str | None, data_format: str,
+                          group_col: str | None = None, value_col: str | None = None,
+                          current_y: list[str] | None = None) -> dict:
+    all_cols = list(df.columns)
+    resolved_date = date_col if date_col in all_cols else (all_cols[0] if all_cols else None)
+
+    if not resolved_date:
+        return {
+            "resolved_date": None,
+            "string_cols": [],
+            "value_options": [],
+            "group_default": None,
+            "value_default": None,
+            "available_y": [],
+            "default_y": [],
+        }
+
+    other_cols = [c for c in all_cols if c != resolved_date]
+    string_cols = [
+        c for c in other_cols
+        if df[c].dtype == object or pd.api.types.is_string_dtype(df[c])
+    ]
+    numeric_suggest = suggest_numeric_columns(df)
+
+    group_default = (
+        group_col if group_col and group_col in string_cols
+        else (string_cols[0] if string_cols else None)
+    )
+    value_options = [c for c in numeric_suggest if c != resolved_date and c != group_default]
+    value_default = (
+        value_col if value_col and value_col in value_options
+        else (value_options[0] if value_options else None)
+    )
+
+    if data_format == "Long" and group_default and value_default:
+        try:
+            effective = pivot_long_to_wide(df, resolved_date, group_default, value_default)
+            available_y = [c for c in effective.columns if c != resolved_date]
+        except Exception:
+            available_y = value_options.copy()
+    else:
+        available_y = value_options.copy()
+
+    kept = [c for c in (current_y or []) if c in available_y]
+    default_y = kept if kept else available_y[:4]
+
+    return {
+        "resolved_date": resolved_date,
+        "string_cols": string_cols,
+        "value_options": value_options,
+        "group_default": group_default,
+        "value_default": value_default,
+        "available_y": available_y,
+        "default_y": default_y,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -353,23 +575,33 @@ _WELCOME_MD = """
 
 ---
 
-### Get Started in 3 Steps
+### Guided Workflow
 
-<div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:1rem; margin:1rem 0;">
+<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.75rem; margin:1rem 0;">
 <div class="step-card">
   <div class="step-number">1</div>
   <div class="step-title">Load Data</div>
-  <div class="step-desc">Upload a CSV from the sidebar or pick one of the built-in demo datasets.</div>
+  <div class="step-desc">Upload your CSV or load a demo dataset from the sidebar.</div>
 </div>
 <div class="step-card">
   <div class="step-number">2</div>
-  <div class="step-title">Pick Columns</div>
-  <div class="step-desc">Select a date column and one or more numeric value columns. The app auto-detects sensible defaults.</div>
+  <div class="step-title">Understand</div>
+  <div class="step-desc">Review auto-detected structure and inspect a raw-data preview.</div>
 </div>
 <div class="step-card">
   <div class="step-number">3</div>
-  <div class="step-title">Explore</div>
-  <div class="step-desc">Choose from 9+ chart types, view summary statistics, and get AI-powered chart interpretation.</div>
+  <div class="step-title">Prepare</div>
+  <div class="step-desc">Set date/value columns and apply cleaning options in the main canvas.</div>
+</div>
+<div class="step-card">
+  <div class="step-number">4</div>
+  <div class="step-title">Visualize</div>
+  <div class="step-desc">Only relevant visualization modes are shown based on series count.</div>
+</div>
+<div class="step-card">
+  <div class="step-number">5</div>
+  <div class="step-title">Interpret</div>
+  <div class="step-desc">Generate AI interpretation when your chart is ready.</div>
 </div>
 </div>
 
@@ -410,57 +642,69 @@ def _process_new_data(df: pd.DataFrame, delim: str | None = None):
     state["raw_df_original"] = df
 
     all_cols = list(df.columns)
-    date_suggestions = suggest_date_columns(df)
-    default_date = date_suggestions[0] if date_suggestions else all_cols[0]
+    default_date = _choose_default_date_col(df)
+    infer_date = default_date if default_date in all_cols else (all_cols[0] if all_cols else None)
+    if infer_date is None:
+        return (
+            state, gr.Column(visible=False), gr.Dropdown(), gr.Radio(), gr.Column(visible=False),
+            gr.Dropdown(), gr.Dropdown(), gr.CheckboxGroup(choices=[], value=[]), "",
+            _format_sidebar_status_md(None), "", pd.DataFrame(), gr.Dropdown(), "",
+            gr.Column(visible=True), gr.Column(visible=False),
+            gr.Radio(choices=[_MODE_SINGLE], value=_MODE_SINGLE), "",
+            gr.Dropdown(choices=_CHART_TYPES, value=_CHART_TYPES[0]), "",
+            gr.Column(visible=False), gr.Column(visible=False), gr.Column(visible=False),
+            pd.DataFrame(),
+        )
 
-    is_long, auto_group, auto_value = detect_long_format(df, default_date)
+    is_long, _, _ = detect_long_format(df, infer_date)
     fmt = "Long" if is_long else "Wide"
-
-    other_cols = [c for c in all_cols if c != default_date]
-    string_cols = [
-        c for c in other_cols
-        if df[c].dtype == object or pd.api.types.is_string_dtype(df[c])
-    ]
-    numeric_cols = [
-        c for c in other_cols if pd.api.types.is_numeric_dtype(df[c])
-    ]
-
-    group_default = (
-        auto_group if auto_group and auto_group in string_cols
-        else (string_cols[0] if string_cols else None)
+    setup_opts = _derive_setup_options(
+        df,
+        date_col=infer_date,
+        data_format=fmt,
+        group_col=None,
+        value_col=None,
+        current_y=None,
     )
-    value_options = [c for c in numeric_cols if c != group_default] if group_default else numeric_cols
-    value_default = (
-        auto_value if auto_value and auto_value in value_options
-        else (value_options[0] if value_options else None)
-    )
-
-    # Compute initial y_cols
-    if is_long and group_default and value_default:
-        try:
-            effective = pivot_long_to_wide(df, default_date, group_default, value_default)
-            available_y = [c for c in effective.columns if c != default_date]
-        except Exception:
-            available_y = list(numeric_cols)
-    else:
-        numeric_suggest = suggest_numeric_columns(df)
-        available_y = [c for c in numeric_suggest if c != default_date]
-
-    default_y = available_y[:4] if available_y else []
+    resolved_date = setup_opts["resolved_date"]
+    group_default = setup_opts["group_default"]
+    value_default = setup_opts["value_default"]
+    available_y = setup_opts["available_y"]
+    default_y = setup_opts["default_y"]
     delim_text = f"Detected delimiter: `{repr(delim)}`" if delim else ""
+    profile_md = _format_raw_profile_md(df, resolved_date, fmt, default_y)
+    status_md = _format_sidebar_status_md(
+        df=df,
+        date_col=resolved_date,
+        data_format=fmt,
+        y_count=len(default_y),
+    )
 
     return (
         state,                                                           # app_state
         gr.Column(visible=True),                                         # setup_col
-        gr.Dropdown(choices=all_cols, value=default_date),               # date_col_dd
+        gr.Dropdown(choices=all_cols, value=resolved_date),              # date_col_dd
         gr.Radio(value=fmt),                                             # format_radio
         gr.Column(visible=is_long),                                      # long_col
-        gr.Dropdown(choices=string_cols, value=group_default),           # group_col_dd
-        gr.Dropdown(choices=value_options, value=value_default),         # value_col_dd
+        gr.Dropdown(choices=setup_opts["string_cols"], value=group_default),     # group_col_dd
+        gr.Dropdown(choices=setup_opts["value_options"], value=value_default),    # value_col_dd
         gr.CheckboxGroup(choices=available_y, value=default_y),          # y_cols_cbg
         delim_text,                                                      # delim_md
-        gr.Column(visible=True),                                         # welcome_col
+        status_md,                                                       # status_md
+        profile_md,                                                      # raw_profile_md
+        _preview_df(df),                                                 # raw_preview_df
+        gr.Dropdown(choices=all_cols, value=resolved_date),              # cast_col_dd
+        "",                                                              # cast_status_md
+        gr.Column(visible=False),                                        # welcome_col
         gr.Column(visible=False),                                        # analysis_col
+        gr.Radio(choices=[_MODE_SINGLE], value=_MODE_SINGLE),            # viz_mode_radio
+        "Apply setup to unlock visualization modes.",                    # mode_hint_md
+        gr.Dropdown(choices=_CHART_TYPES, value=_CHART_TYPES[0]),        # single_chart_dd
+        "*Apply setup to tailor chart options to your data.*",           # single_gate_md
+        gr.Column(visible=False),                                        # single_mode_col
+        gr.Column(visible=False),                                        # panel_mode_col
+        gr.Column(visible=False),                                        # spag_mode_col
+        pd.DataFrame(),                                                  # cleaned_preview_df
     )
 
 
@@ -472,7 +716,18 @@ def on_file_upload(file_obj, state):
             gr.Column(visible=False), gr.Dropdown(), gr.Radio(),
             gr.Column(visible=False), gr.Dropdown(), gr.Dropdown(),
             gr.CheckboxGroup(choices=[], value=[]), "",
+            "*No data loaded yet.*",
+            "",
+            pd.DataFrame(),
+            gr.Dropdown(),
+            "",
             gr.Column(visible=True), gr.Column(visible=False),
+            gr.Radio(choices=[_MODE_SINGLE], value=_MODE_SINGLE),
+            "",
+            gr.Dropdown(choices=_CHART_TYPES, value=_CHART_TYPES[0]),
+            "",
+            gr.Column(visible=False), gr.Column(visible=False), gr.Column(visible=False),
+            pd.DataFrame(),
         )
     path = file_obj if isinstance(file_obj, str) else str(file_obj)
     df, delim = _read_file_to_df(path)
@@ -486,7 +741,11 @@ def on_demo_select(choice, state):
             gr.Column(), gr.Dropdown(), gr.Radio(),
             gr.Column(), gr.Dropdown(), gr.Dropdown(),
             gr.CheckboxGroup(), "",
+            gr.Markdown(), gr.Markdown(), gr.Dataframe(), gr.Dropdown(), gr.Markdown(),
             gr.Column(), gr.Column(),
+            gr.Radio(), gr.Markdown(), gr.Dropdown(), gr.Markdown(),
+            gr.Column(), gr.Column(), gr.Column(),
+            gr.Dataframe(),
         )
     demo_path = _DEMO_FILES[choice]
     df = pd.read_csv(demo_path)
@@ -495,6 +754,41 @@ def on_demo_select(choice, state):
 
 def on_format_change(fmt):
     return gr.Column(visible=(fmt == "Long"))
+
+
+def on_setup_inputs_change(date_col, data_format, group_col, value_col, current_y, state):
+    raw_df = state.get("raw_df_original")
+    if raw_df is None:
+        return (
+            gr.Column(visible=(data_format == "Long")),
+            gr.Dropdown(), gr.Dropdown(), gr.CheckboxGroup(),
+            "", _format_sidebar_status_md(None),
+        )
+
+    opts = _derive_setup_options(
+        raw_df,
+        date_col=date_col,
+        data_format=data_format,
+        group_col=group_col,
+        value_col=value_col,
+        current_y=list(current_y) if current_y else [],
+    )
+    resolved_date = opts["resolved_date"]
+    profile_md = _format_raw_profile_md(raw_df, resolved_date, data_format, opts["default_y"])
+    status_md = _format_sidebar_status_md(
+        raw_df,
+        date_col=resolved_date,
+        data_format=data_format,
+        y_count=len(opts["default_y"]),
+    )
+    return (
+        gr.Column(visible=(data_format == "Long")),
+        gr.Dropdown(choices=opts["string_cols"], value=opts["group_default"]),
+        gr.Dropdown(choices=opts["value_options"], value=opts["value_default"]),
+        gr.CheckboxGroup(choices=opts["available_y"], value=opts["default_y"]),
+        profile_md,
+        status_md,
+    )
 
 
 def on_long_cols_change(date_col, group_col, value_col, state):
@@ -509,30 +803,140 @@ def on_long_cols_change(date_col, group_col, value_col, state):
         return gr.CheckboxGroup(choices=[], value=[])
 
 
-def on_apply_setup(state, date_col, data_format, group_col, value_col,
-                   y_cols, dup_action, missing_action, freq_override):
-    if not y_cols:
+def on_y_selection_change(date_col, data_format, y_cols, state):
+    raw_df = state.get("raw_df_original")
+    if raw_df is None:
+        return "", _format_sidebar_status_md(None)
+
+    all_cols = list(raw_df.columns)
+    resolved_date = date_col if date_col in all_cols else (all_cols[0] if all_cols else "")
+    y_list = list(y_cols) if y_cols else []
+    profile_md = _format_raw_profile_md(raw_df, resolved_date, data_format, y_list)
+    status_md = _format_sidebar_status_md(
+        raw_df,
+        date_col=resolved_date,
+        data_format=data_format,
+        y_count=len(y_list),
+    )
+    return profile_md, status_md
+
+
+def on_cast_apply(state, cast_col, cast_type, date_col, data_format, group_col, value_col, y_cols):
+    raw_df = state.get("raw_df_original")
+    if raw_df is None or not cast_col or cast_col not in raw_df.columns:
         return (
             state,
-            gr.Column(visible=True), gr.Column(visible=False),
-            "*Select at least one value column.*", "",
-            gr.Dropdown(), gr.Dropdown(),
-            None, "", "",
-            gr.CheckboxGroup(), None, "", "",
-            gr.CheckboxGroup(), gr.Dropdown(), None, "", "",
+            gr.Dataframe(),
+            "",
+            _format_sidebar_status_md(None),
+            gr.Dropdown(),
+            gr.Column(visible=(data_format == "Long")),
+            gr.Dropdown(),
+            gr.Dropdown(),
+            gr.CheckboxGroup(),
+            gr.Dropdown(),
+            "*Select a valid column to cast.*",
         )
+
+    updated = raw_df.copy()
+    try:
+        if cast_type == "Numeric (coerce)":
+            updated[cast_col] = pd.to_numeric(updated[cast_col], errors="coerce")
+        elif cast_type == "Datetime (coerce)":
+            updated[cast_col] = pd.to_datetime(updated[cast_col], errors="coerce")
+        else:
+            updated[cast_col] = updated[cast_col].astype(str)
+    except Exception as exc:
+        return (
+            state,
+            gr.Dataframe(value=_preview_df(raw_df)),
+            "",
+            _format_sidebar_status_md(raw_df, date_col=date_col, data_format=data_format),
+            gr.Dropdown(choices=list(raw_df.columns), value=date_col),
+            gr.Column(visible=(data_format == "Long")),
+            gr.Dropdown(),
+            gr.Dropdown(),
+            gr.CheckboxGroup(),
+            gr.Dropdown(choices=list(raw_df.columns), value=cast_col),
+            f"*Type cast failed: {exc}*",
+        )
+
+    state["raw_df_original"] = updated
+    all_cols = list(updated.columns)
+    next_date = date_col if date_col in all_cols else _choose_default_date_col(updated)
+
+    opts = _derive_setup_options(
+        updated,
+        date_col=next_date,
+        data_format=data_format,
+        group_col=group_col,
+        value_col=value_col,
+        current_y=list(y_cols) if y_cols else [],
+    )
+
+    profile_md = _format_raw_profile_md(updated, opts["resolved_date"], data_format, opts["default_y"])
+    status_md = _format_sidebar_status_md(
+        updated,
+        date_col=opts["resolved_date"],
+        data_format=data_format,
+        y_count=len(opts["default_y"]),
+    )
+
+    return (
+        state,
+        gr.Dataframe(value=_preview_df(updated)),
+        profile_md,
+        status_md,
+        gr.Dropdown(choices=all_cols, value=opts["resolved_date"]),
+        gr.Column(visible=(data_format == "Long")),
+        gr.Dropdown(choices=opts["string_cols"], value=opts["group_default"]),
+        gr.Dropdown(choices=opts["value_options"], value=opts["value_default"]),
+        gr.CheckboxGroup(choices=opts["available_y"], value=opts["default_y"]),
+        gr.Dropdown(choices=all_cols, value=cast_col),
+        f"*Applied cast: `{cast_col}` -> {cast_type}*",
+    )
+
+
+def on_apply_setup(state, date_col, data_format, group_col, value_col,
+                   y_cols, dup_action, missing_action, freq_override):
+    def _error_return(message: str):
+        return (
+            state,                                      # 0  app_state
+            gr.Column(visible=False),                  # 1  welcome_col
+            gr.Column(visible=True),                   # 2  analysis_col
+            message,                                   # 3  quality_md
+            "",                                        # 4  freq_info_md
+            gr.Dropdown(),                             # 5  single_y_dd
+            gr.Dropdown(),                             # 6  color_by_dd
+            None,                                      # 7  single_plot
+            "",                                        # 8  single_stats_md
+            "",                                        # 9  single_interp_md
+            gr.CheckboxGroup(),                        # 10 panel_cols_cbg
+            None,                                      # 11 panel_plot
+            "",                                        # 12 panel_summary_md
+            "",                                        # 13 panel_interp_md
+            gr.CheckboxGroup(),                        # 14 spag_cols_cbg
+            gr.Dropdown(),                             # 15 spag_highlight_dd
+            None,                                      # 16 spag_plot
+            "",                                        # 17 spag_summary_md
+            "",                                        # 18 spag_interp_md
+            gr.Radio(choices=[_MODE_SINGLE], value=_MODE_SINGLE),  # 19 viz_mode_radio
+            "Load data and apply setup.",              # 20 mode_hint_md
+            gr.Dropdown(choices=_CHART_TYPES, value=_CHART_TYPES[0]),  # 21 single_chart_dd
+            "",                                        # 22 single_gate_md
+            gr.Column(visible=False),                  # 23 single_mode_col
+            gr.Column(visible=False),                  # 24 panel_mode_col
+            gr.Column(visible=False),                  # 25 spag_mode_col
+            pd.DataFrame(),                            # 26 cleaned_preview_df
+            _format_sidebar_status_md(None),           # 27 status_md
+        )
+
+    if not y_cols:
+        return _error_return("*Select at least one value column.*")
 
     raw_df = state.get("raw_df_original")
     if raw_df is None:
-        return (
-            state,
-            gr.Column(visible=True), gr.Column(visible=False),
-            "*No data loaded.*", "",
-            gr.Dropdown(), gr.Dropdown(),
-            None, "", "",
-            gr.CheckboxGroup(), None, "", "",
-            gr.CheckboxGroup(), gr.Dropdown(), None, "", "",
-        )
+        return _error_return("*No data loaded.*")
 
     # Pivot if long format
     if data_format == "Long" and group_col and value_col:
@@ -589,6 +993,23 @@ def on_apply_setup(state, date_col, data_format, group_col, value_col,
     y_list = list(y_cols)
     panel_default = y_list[:4] if len(y_list) >= 2 else y_list
     highlight_choices = ["(none)"] + y_list
+    mode_choices, recommended_mode, mode_hint = _get_mode_config(len(y_list))
+    single_visible, panel_visible, spag_visible = _mode_visibility(recommended_mode)
+    state["mode_choices"] = mode_choices
+    state["recommended_mode"] = recommended_mode
+
+    chart_choices, chart_gate_md = _available_chart_choices(
+        cleaned, date_col, y_list[0], freq
+    )
+
+    status_md = _format_sidebar_status_md(
+        df=cleaned,
+        date_col=date_col,
+        data_format=data_format,
+        y_count=len(y_list),
+        freq_label=freq.label,
+        cleaned_rows=report.rows_after,
+    )
 
     return (
         state,                                                              # 0  app_state
@@ -596,24 +1017,30 @@ def on_apply_setup(state, date_col, data_format, group_col, value_col,
         gr.Column(visible=True),                                            # 2  analysis_col
         quality_md,                                                         # 3  quality_md
         freq_text,                                                          # 4  freq_info_md
-        # Single series tab
         gr.Dropdown(choices=y_list, value=y_list[0]),                       # 5  single_y_dd
         gr.Dropdown(choices=color_by_choices,
                     value=color_by_choices[0] if color_by_choices else None),# 6  color_by_dd
         None,                                                               # 7  single_plot
         "",                                                                 # 8  single_stats_md
         "",                                                                 # 9  single_interp_md
-        # Panel tab
         gr.CheckboxGroup(choices=y_list, value=panel_default),              # 10 panel_cols_cbg
         None,                                                               # 11 panel_plot
         "",                                                                 # 12 panel_summary_md
         "",                                                                 # 13 panel_interp_md
-        # Spaghetti tab
         gr.CheckboxGroup(choices=y_list, value=y_list),                     # 14 spag_cols_cbg
-        gr.Dropdown(choices=highlight_choices, value="(none)"),              # 15 spag_highlight_dd
+        gr.Dropdown(choices=highlight_choices, value="(none)"),             # 15 spag_highlight_dd
         None,                                                               # 16 spag_plot
         "",                                                                 # 17 spag_summary_md
         "",                                                                 # 18 spag_interp_md
+        gr.Radio(choices=mode_choices, value=recommended_mode),             # 19 viz_mode_radio
+        mode_hint,                                                          # 20 mode_hint_md
+        gr.Dropdown(choices=chart_choices, value=chart_choices[0]),         # 21 single_chart_dd
+        chart_gate_md,                                                      # 22 single_gate_md
+        gr.Column(visible=single_visible),                                  # 23 single_mode_col
+        gr.Column(visible=panel_visible),                                   # 24 panel_mode_col
+        gr.Column(visible=spag_visible),                                    # 25 spag_mode_col
+        _preview_df(cleaned),                                               # 26 cleaned_preview_df
+        status_md,                                                          # 27 status_md
     )
 
 
@@ -624,6 +1051,27 @@ def on_dr_mode_change(mode):
         gr.Column(visible=(mode == "Last N years")),
         gr.Column(visible=(mode == "Custom")),
     )
+
+
+def on_viz_mode_change(mode):
+    single_visible, panel_visible, spag_visible = _mode_visibility(mode)
+    return (
+        gr.Column(visible=single_visible),
+        gr.Column(visible=panel_visible),
+        gr.Column(visible=spag_visible),
+    )
+
+
+def on_single_y_change(state, y_col, current_chart):
+    cleaned_df = state.get("cleaned_df")
+    date_col = state.get("date_col")
+    freq_info = state.get("freq_info")
+    if cleaned_df is None or not y_col or not date_col:
+        return gr.Dropdown(choices=_CHART_TYPES, value=_CHART_TYPES[0]), ""
+
+    chart_choices, chart_gate_md = _available_chart_choices(cleaned_df, date_col, y_col, freq_info)
+    next_chart = current_chart if current_chart in chart_choices else chart_choices[0]
+    return gr.Dropdown(choices=chart_choices, value=next_chart), chart_gate_md
 
 
 def on_chart_type_change(chart_type):
@@ -658,6 +1106,10 @@ def on_single_update(state, y_col, dr_mode, dr_n, dr_start, dr_end,
 
     if df_plot.empty:
         return state, None, "*No data in selected range.*"
+
+    blocked = _chart_availability(df_plot, date_col, y_col, freq_info)
+    if chart_type in blocked:
+        return state, None, f"*{chart_type} unavailable: {blocked[chart_type]}*"
 
     fig, err = _generate_single_chart(
         df_plot, date_col, y_col, chart_type, palette_colors,
@@ -785,6 +1237,30 @@ def on_spag_interpret(state):
     return render_interpretation_markdown(interp)
 
 
+def on_auto_generate(state, viz_mode,
+                     single_y, dr_mode, dr_n, dr_start, dr_end,
+                     single_chart, single_pal, color_by, period, window, lag, decomp_model,
+                     panel_cols, panel_chart, panel_shared, panel_pal,
+                     spag_cols, spag_alpha, spag_topn, spag_highlight, spag_median, spag_pal):
+    if viz_mode == _MODE_PANEL:
+        next_state, fig, summary_md = on_panel_update(
+            state, panel_cols, panel_chart, panel_shared, panel_pal
+        )
+        return next_state, None, "", fig, summary_md, None, ""
+
+    if viz_mode == _MODE_SPAG:
+        next_state, fig, summary_md = on_spag_update(
+            state, spag_cols, spag_alpha, spag_topn, spag_highlight, spag_median, spag_pal
+        )
+        return next_state, None, "", None, "", fig, summary_md
+
+    next_state, fig, stats_md = on_single_update(
+        state, single_y, dr_mode, dr_n, dr_start, dr_end,
+        single_chart, single_pal, color_by, period, window, lag, decomp_model
+    )
+    return next_state, fig, stats_md, None, "", None, ""
+
+
 # ---------------------------------------------------------------------------
 # Build the Gradio app
 # ---------------------------------------------------------------------------
@@ -805,11 +1281,6 @@ with gr.Blocks(
             '<span class="subtitle-text">ISA 444 &middot; Miami University</span>'
             '</div>'
         )
-        gr.Markdown("**Vibe-Coded By**")
-        gr.HTML(_DEVELOPER_CARD)
-        gr.Markdown("v0.2.0 &middot; Last updated Feb 2026", elem_classes=["caption"])
-
-        gr.Markdown("---")
         gr.Markdown("### Data Input")
 
         file_upload = gr.File(
@@ -824,44 +1295,12 @@ with gr.Blocks(
         )
         reset_btn = gr.Button("Reset all", variant="secondary", size="sm")
         delim_md = gr.Markdown("")
+        status_md = gr.Markdown("*No data loaded yet.*")
 
-        # ---- Setup controls (hidden until data loaded) ----
-        with gr.Column(visible=False) as setup_col:
-            gr.Markdown("---")
-            gr.Markdown("### Column & Cleaning Setup")
-            gr.Markdown("*Configure below, then click **Apply setup**.*")
-
-            date_col_dd = gr.Dropdown(label="Date column", choices=[])
-            format_radio = gr.Radio(
-                label="Data format", choices=["Wide", "Long"], value="Wide",
-            )
-
-            with gr.Column(visible=False) as long_col:
-                group_col_dd = gr.Dropdown(label="Group column", choices=[])
-                value_col_dd = gr.Dropdown(label="Value column", choices=[])
-
-            y_cols_cbg = gr.CheckboxGroup(label="Value column(s)", choices=[])
-
-            gr.Markdown("**Cleaning options**")
-            dup_dd = gr.Dropdown(
-                label="Duplicate dates",
-                choices=["keep_last", "keep_first", "drop_all"],
-                value="keep_last",
-            )
-            missing_dd = gr.Dropdown(
-                label="Missing values",
-                choices=["interpolate", "ffill", "drop"],
-                value="interpolate",
-            )
-            freq_tb = gr.Textbox(
-                label="Override frequency label (optional)",
-                placeholder="e.g. Daily, Weekly, Monthly",
-            )
-            apply_btn = gr.Button("Apply setup", variant="primary")
-            freq_info_md = gr.Markdown("")
-
-        # ---- QueryChat placeholder ----
-        with gr.Column(visible=False) as qc_col:
+        with gr.Accordion("About", open=False):
+            gr.Markdown("**Vibe-Coded By**")
+            gr.HTML(_DEVELOPER_CARD)
+            gr.Markdown("v0.2.0 &middot; Last updated Feb 2026", elem_classes=["caption"])
             gr.Markdown("---")
             gr.Markdown("### QueryChat")
             if check_querychat_available():
@@ -882,165 +1321,228 @@ with gr.Blocks(
         gr.Markdown(_WELCOME_MD)
 
     # ===================================================================
+    # Setup panel (hidden until data loaded)
+    # ===================================================================
+    with gr.Column(visible=False) as setup_col:
+        gr.Markdown("## Step 1. Understand Data")
+        gr.Markdown("*Check inferred structure and preview your raw file before cleaning.*")
+        raw_profile_md = gr.Markdown("")
+        raw_preview_df = gr.Dataframe(
+            label="Raw data preview (first 10 rows)",
+            interactive=False,
+            wrap=True,
+        )
+
+        gr.Markdown("## Step 2. Prepare Data")
+        gr.Markdown("*If the date guess is wrong, change the date column - value choices update automatically.*")
+        with gr.Row():
+            with gr.Column(scale=1, min_width=300):
+                gr.Markdown("### Structure")
+                date_col_dd = gr.Dropdown(label="Date column", choices=[])
+                format_radio = gr.Radio(
+                    label="Data format", choices=["Wide", "Long"], value="Wide",
+                )
+                with gr.Column(visible=False) as long_col:
+                    group_col_dd = gr.Dropdown(label="Group column", choices=[])
+                    value_col_dd = gr.Dropdown(label="Value column", choices=[])
+                y_cols_cbg = gr.CheckboxGroup(label="Value column(s)", choices=[])
+
+            with gr.Column(scale=1, min_width=300):
+                gr.Markdown("### Cleaning")
+                dup_dd = gr.Dropdown(
+                    label="Duplicate dates",
+                    choices=["keep_last", "keep_first", "drop_all"],
+                    value="keep_last",
+                )
+                missing_dd = gr.Dropdown(
+                    label="Missing values",
+                    choices=["interpolate", "ffill", "drop"],
+                    value="interpolate",
+                )
+                freq_tb = gr.Textbox(
+                    label="Override frequency label (optional)",
+                    placeholder="e.g. Daily, Weekly, Monthly",
+                )
+                apply_btn = gr.Button("Apply setup", variant="primary")
+                freq_info_md = gr.Markdown("")
+
+                with gr.Accordion("Type Casting (optional)", open=False):
+                    gr.Markdown("*Use this when a column is read with the wrong dtype.*")
+                    cast_col_dd = gr.Dropdown(label="Column", choices=[])
+                    cast_type_dd = gr.Dropdown(
+                        label="Cast to",
+                        choices=["Numeric (coerce)", "Datetime (coerce)", "String"],
+                        value="Numeric (coerce)",
+                    )
+                    cast_apply_btn = gr.Button("Apply cast", variant="secondary", size="sm")
+                    cast_status_md = gr.Markdown("")
+
+    # ===================================================================
     # Analysis panel (hidden until setup applied)
     # ===================================================================
     with gr.Column(visible=False) as analysis_col:
+        gr.Markdown("## Step 3. Visualize")
+        mode_hint_md = gr.Markdown("")
+        viz_mode_radio = gr.Radio(
+            label="Visualization mode",
+            choices=[_MODE_SINGLE],
+            value=_MODE_SINGLE,
+        )
+
+        with gr.Accordion("Cleaned Data Preview", open=False):
+            cleaned_preview_df = gr.Dataframe(
+                label="Cleaned data preview (first 10 rows)",
+                interactive=False,
+                wrap=True,
+            )
+
         with gr.Accordion("Data Quality Report", open=False):
             quality_md = gr.Markdown("")
 
-        with gr.Tabs():
-            # ---------------------------------------------------------------
-            # Tab: Single Series
-            # ---------------------------------------------------------------
-            with gr.Tab("Single Series"):
-                with gr.Row():
-                    with gr.Column(scale=1, min_width=280):
-                        single_y_dd = gr.Dropdown(label="Value column", choices=[])
-                        dr_mode_radio = gr.Radio(
-                            label="Date range",
-                            choices=["All", "Last N years", "Custom"],
-                            value="All",
+        with gr.Column(visible=False) as single_mode_col:
+            with gr.Row():
+                with gr.Column(scale=1, min_width=280):
+                    single_y_dd = gr.Dropdown(label="Value column", choices=[])
+                    dr_mode_radio = gr.Radio(
+                        label="Date range",
+                        choices=["All", "Last N years", "Custom"],
+                        value="All",
+                    )
+                    with gr.Column(visible=False) as dr_n_col:
+                        dr_n_slider = gr.Slider(
+                            label="Years", minimum=1, maximum=20,
+                            value=5, step=1,
                         )
-                        with gr.Column(visible=False) as dr_n_col:
-                            dr_n_slider = gr.Slider(
-                                label="Years", minimum=1, maximum=20,
-                                value=5, step=1,
-                            )
-                        with gr.Column(visible=False) as dr_custom_col:
-                            dr_start_tb = gr.Textbox(label="Start date", placeholder="YYYY-MM-DD")
-                            dr_end_tb = gr.Textbox(label="End date", placeholder="YYYY-MM-DD")
+                    with gr.Column(visible=False) as dr_custom_col:
+                        dr_start_tb = gr.Textbox(label="Start date", placeholder="YYYY-MM-DD")
+                        dr_end_tb = gr.Textbox(label="End date", placeholder="YYYY-MM-DD")
 
-                        single_chart_dd = gr.Dropdown(
-                            label="Chart type", choices=_CHART_TYPES,
-                            value=_CHART_TYPES[0],
-                        )
-                        single_pal_dd = gr.Dropdown(
-                            label="Color palette", choices=_PALETTE_NAMES,
-                            value=_PALETTE_NAMES[0],
-                        )
-                        single_swatch = gr.Plot(label="Palette preview", show_label=False)
+                    single_chart_dd = gr.Dropdown(
+                        label="Chart type", choices=_CHART_TYPES,
+                        value=_CHART_TYPES[0],
+                    )
+                    single_gate_md = gr.Markdown("")
+                    single_pal_dd = gr.Dropdown(
+                        label="Color palette", choices=_PALETTE_NAMES,
+                        value=_PALETTE_NAMES[0],
+                    )
+                    single_swatch = gr.Plot(label="Palette preview", show_label=False)
 
-                        with gr.Column(visible=False) as color_by_col:
-                            color_by_dd = gr.Dropdown(
-                                label="Color by",
-                                choices=["month", "quarter", "year", "day_of_week"],
-                            )
-                        with gr.Column(visible=False) as period_col:
-                            period_dd = gr.Dropdown(
-                                label="Period", choices=["month", "quarter"],
-                                value="month",
-                            )
-                        with gr.Column(visible=False) as window_col:
-                            window_slider = gr.Slider(
-                                label="Window", minimum=2, maximum=52,
-                                value=12, step=1,
-                            )
-                        with gr.Column(visible=False) as lag_col:
-                            lag_slider = gr.Slider(
-                                label="Lag", minimum=1, maximum=52,
-                                value=1, step=1,
-                            )
-                        with gr.Column(visible=False) as decomp_col:
-                            decomp_dd = gr.Dropdown(
-                                label="Model",
-                                choices=["additive", "multiplicative"],
-                                value="additive",
-                            )
-                        single_update_btn = gr.Button("Update chart", variant="primary")
+                    with gr.Column(visible=False) as color_by_col:
+                        color_by_dd = gr.Dropdown(
+                            label="Color by",
+                            choices=["month", "quarter", "year", "day_of_week"],
+                        )
+                    with gr.Column(visible=False) as period_col:
+                        period_dd = gr.Dropdown(
+                            label="Period", choices=["month", "quarter"],
+                            value="month",
+                        )
+                    with gr.Column(visible=False) as window_col:
+                        window_slider = gr.Slider(
+                            label="Window", minimum=2, maximum=52,
+                            value=12, step=1,
+                        )
+                    with gr.Column(visible=False) as lag_col:
+                        lag_slider = gr.Slider(
+                            label="Lag", minimum=1, maximum=52,
+                            value=1, step=1,
+                        )
+                    with gr.Column(visible=False) as decomp_col:
+                        decomp_dd = gr.Dropdown(
+                            label="Model",
+                            choices=["additive", "multiplicative"],
+                            value="additive",
+                        )
+                    single_update_btn = gr.Button("Update chart", variant="primary")
 
-                    with gr.Column(scale=3):
-                        single_plot = gr.Plot(label="Chart")
-                        with gr.Accordion("Summary Statistics", open=False):
-                            single_stats_md = gr.Markdown("")
-                        with gr.Accordion("AI Chart Interpretation", open=False):
-                            gr.Markdown(
-                                "*The chart image (PNG) is sent to OpenAI for "
-                                "interpretation. Do not include sensitive data.*"
-                            )
-                            single_interp_btn = gr.Button(
-                                "Interpret Chart with AI", variant="secondary",
-                            )
-                            single_interp_md = gr.Markdown("")
+                with gr.Column(scale=3):
+                    single_plot = gr.Plot(label="Chart")
+                    with gr.Accordion("Summary Statistics", open=False):
+                        single_stats_md = gr.Markdown("")
+                    with gr.Accordion("AI Chart Interpretation", open=False):
+                        gr.Markdown(
+                            "*The chart image (PNG) is sent to OpenAI for "
+                            "interpretation. Do not include sensitive data.*"
+                        )
+                        single_interp_btn = gr.Button(
+                            "Interpret Chart with AI", variant="secondary",
+                        )
+                        single_interp_md = gr.Markdown("")
 
-            # ---------------------------------------------------------------
-            # Tab: Few Series (Panel)
-            # ---------------------------------------------------------------
-            with gr.Tab("Few Series (Panel)"):
-                with gr.Row():
-                    with gr.Column(scale=1, min_width=280):
-                        panel_cols_cbg = gr.CheckboxGroup(
-                            label="Columns to plot", choices=[],
-                        )
-                        panel_chart_dd = gr.Dropdown(
-                            label="Chart type", choices=["line", "bar"],
-                            value="line",
-                        )
-                        panel_shared_cb = gr.Checkbox(
-                            label="Shared Y axis", value=True,
-                        )
-                        panel_pal_dd = gr.Dropdown(
-                            label="Color palette", choices=_PALETTE_NAMES,
-                            value=_PALETTE_NAMES[0],
-                        )
-                        panel_update_btn = gr.Button("Update chart", variant="primary")
+        with gr.Column(visible=False) as panel_mode_col:
+            with gr.Row():
+                with gr.Column(scale=1, min_width=280):
+                    panel_cols_cbg = gr.CheckboxGroup(
+                        label="Columns to plot", choices=[],
+                    )
+                    panel_chart_dd = gr.Dropdown(
+                        label="Chart type", choices=["line", "bar"],
+                        value="line",
+                    )
+                    panel_shared_cb = gr.Checkbox(
+                        label="Shared Y axis", value=True,
+                    )
+                    panel_pal_dd = gr.Dropdown(
+                        label="Color palette", choices=_PALETTE_NAMES,
+                        value=_PALETTE_NAMES[0],
+                    )
+                    panel_update_btn = gr.Button("Update chart", variant="primary")
 
-                    with gr.Column(scale=3):
-                        panel_plot = gr.Plot(label="Panel Chart")
-                        with gr.Accordion("Per-series Summary", open=False):
-                            panel_summary_md = gr.Markdown("")
-                        with gr.Accordion("AI Chart Interpretation", open=False):
-                            gr.Markdown(
-                                "*The chart image (PNG) is sent to OpenAI for "
-                                "interpretation. Do not include sensitive data.*"
-                            )
-                            panel_interp_btn = gr.Button(
-                                "Interpret Chart with AI", variant="secondary",
-                            )
-                            panel_interp_md = gr.Markdown("")
+                with gr.Column(scale=3):
+                    panel_plot = gr.Plot(label="Panel Chart")
+                    with gr.Accordion("Per-series Summary", open=False):
+                        panel_summary_md = gr.Markdown("")
+                    with gr.Accordion("AI Chart Interpretation", open=False):
+                        gr.Markdown(
+                            "*The chart image (PNG) is sent to OpenAI for "
+                            "interpretation. Do not include sensitive data.*"
+                        )
+                        panel_interp_btn = gr.Button(
+                            "Interpret Chart with AI", variant="secondary",
+                        )
+                        panel_interp_md = gr.Markdown("")
 
-            # ---------------------------------------------------------------
-            # Tab: Many Series (Spaghetti)
-            # ---------------------------------------------------------------
-            with gr.Tab("Many Series (Spaghetti)"):
-                with gr.Row():
-                    with gr.Column(scale=1, min_width=280):
-                        spag_cols_cbg = gr.CheckboxGroup(
-                            label="Columns to include", choices=[],
-                        )
-                        spag_alpha_slider = gr.Slider(
-                            label="Alpha (opacity)",
-                            minimum=0.05, maximum=1.0, value=0.15, step=0.05,
-                        )
-                        spag_topn_num = gr.Number(
-                            label="Highlight top N (0 = none)", value=0,
-                            minimum=0, precision=0,
-                        )
-                        spag_highlight_dd = gr.Dropdown(
-                            label="Highlight series",
-                            choices=["(none)"], value="(none)",
-                        )
-                        spag_median_cb = gr.Checkbox(
-                            label="Show Median + IQR band", value=False,
-                        )
-                        spag_pal_dd = gr.Dropdown(
-                            label="Color palette", choices=_PALETTE_NAMES,
-                            value=_PALETTE_NAMES[0],
-                        )
-                        spag_update_btn = gr.Button("Update chart", variant="primary")
+        with gr.Column(visible=False) as spag_mode_col:
+            with gr.Row():
+                with gr.Column(scale=1, min_width=280):
+                    spag_cols_cbg = gr.CheckboxGroup(
+                        label="Columns to include", choices=[],
+                    )
+                    spag_alpha_slider = gr.Slider(
+                        label="Alpha (opacity)",
+                        minimum=0.05, maximum=1.0, value=0.15, step=0.05,
+                    )
+                    spag_topn_num = gr.Number(
+                        label="Highlight top N (0 = none)", value=0,
+                        minimum=0, precision=0,
+                    )
+                    spag_highlight_dd = gr.Dropdown(
+                        label="Highlight series",
+                        choices=["(none)"], value="(none)",
+                    )
+                    spag_median_cb = gr.Checkbox(
+                        label="Show Median + IQR band", value=False,
+                    )
+                    spag_pal_dd = gr.Dropdown(
+                        label="Color palette", choices=_PALETTE_NAMES,
+                        value=_PALETTE_NAMES[0],
+                    )
+                    spag_update_btn = gr.Button("Update chart", variant="primary")
 
-                    with gr.Column(scale=3):
-                        spag_plot = gr.Plot(label="Spaghetti Chart")
-                        with gr.Accordion("Per-series Summary", open=False):
-                            spag_summary_md = gr.Markdown("")
-                        with gr.Accordion("AI Chart Interpretation", open=False):
-                            gr.Markdown(
-                                "*The chart image (PNG) is sent to OpenAI for "
-                                "interpretation. Do not include sensitive data.*"
-                            )
-                            spag_interp_btn = gr.Button(
-                                "Interpret Chart with AI", variant="secondary",
-                            )
-                            spag_interp_md = gr.Markdown("")
+                with gr.Column(scale=3):
+                    spag_plot = gr.Plot(label="Spaghetti Chart")
+                    with gr.Accordion("Per-series Summary", open=False):
+                        spag_summary_md = gr.Markdown("")
+                    with gr.Accordion("AI Chart Interpretation", open=False):
+                        gr.Markdown(
+                            "*The chart image (PNG) is sent to OpenAI for "
+                            "interpretation. Do not include sensitive data.*"
+                        )
+                        spag_interp_btn = gr.Button(
+                            "Interpret Chart with AI", variant="secondary",
+                        )
+                        spag_interp_md = gr.Markdown("")
 
     # ===================================================================
     # Event wiring
@@ -1049,7 +1551,11 @@ with gr.Blocks(
     _DATA_LOAD_OUTPUTS = [
         app_state, setup_col, date_col_dd, format_radio, long_col,
         group_col_dd, value_col_dd, y_cols_cbg, delim_md,
+        status_md, raw_profile_md, raw_preview_df,
+        cast_col_dd, cast_status_md,
         welcome_col, analysis_col,
+        viz_mode_radio, mode_hint_md, single_chart_dd, single_gate_md,
+        single_mode_col, panel_mode_col, spag_mode_col, cleaned_preview_df,
     ]
 
     file_upload.change(
@@ -1067,11 +1573,16 @@ with gr.Blocks(
     # Reset via page reload
     reset_btn.click(fn=None, js="() => { window.location.reload(); }")
 
-    # Format toggle
+    date_col_dd.change(
+        on_setup_inputs_change,
+        inputs=[date_col_dd, format_radio, group_col_dd, value_col_dd, y_cols_cbg, app_state],
+        outputs=[long_col, group_col_dd, value_col_dd, y_cols_cbg, raw_profile_md, status_md],
+    )
+
     format_radio.change(
-        on_format_change,
-        inputs=[format_radio],
-        outputs=[long_col],
+        on_setup_inputs_change,
+        inputs=[date_col_dd, format_radio, group_col_dd, value_col_dd, y_cols_cbg, app_state],
+        outputs=[long_col, group_col_dd, value_col_dd, y_cols_cbg, raw_profile_md, status_md],
     )
 
     # Long-format column changes update y_cols
@@ -1081,6 +1592,21 @@ with gr.Blocks(
             inputs=[date_col_dd, group_col_dd, value_col_dd, app_state],
             outputs=[y_cols_cbg],
         )
+
+    y_cols_cbg.change(
+        on_y_selection_change,
+        inputs=[date_col_dd, format_radio, y_cols_cbg, app_state],
+        outputs=[raw_profile_md, status_md],
+    )
+
+    cast_apply_btn.click(
+        on_cast_apply,
+        inputs=[app_state, cast_col_dd, cast_type_dd, date_col_dd, format_radio, group_col_dd, value_col_dd, y_cols_cbg],
+        outputs=[
+            app_state, raw_preview_df, raw_profile_md, status_md, date_col_dd,
+            long_col, group_col_dd, value_col_dd, y_cols_cbg, cast_col_dd, cast_status_md,
+        ],
+    )
 
     # Apply setup
     _APPLY_OUTPUTS = [
@@ -1106,6 +1632,15 @@ with gr.Blocks(
         spag_plot,             # 16
         spag_summary_md,       # 17
         spag_interp_md,        # 18
+        viz_mode_radio,        # 19
+        mode_hint_md,          # 20
+        single_chart_dd,       # 21
+        single_gate_md,        # 22
+        single_mode_col,       # 23
+        panel_mode_col,        # 24
+        spag_mode_col,         # 25
+        cleaned_preview_df,    # 26
+        status_md,             # 27
     ]
 
     apply_btn.click(
@@ -1115,6 +1650,16 @@ with gr.Blocks(
             value_col_dd, y_cols_cbg, dup_dd, missing_dd, freq_tb,
         ],
         outputs=_APPLY_OUTPUTS,
+    ).then(
+        on_auto_generate,
+        inputs=[
+            app_state, viz_mode_radio,
+            single_y_dd, dr_mode_radio, dr_n_slider, dr_start_tb, dr_end_tb,
+            single_chart_dd, single_pal_dd, color_by_dd, period_dd, window_slider, lag_slider, decomp_dd,
+            panel_cols_cbg, panel_chart_dd, panel_shared_cb, panel_pal_dd,
+            spag_cols_cbg, spag_alpha_slider, spag_topn_num, spag_highlight_dd, spag_median_cb, spag_pal_dd,
+        ],
+        outputs=[app_state, single_plot, single_stats_md, panel_plot, panel_summary_md, spag_plot, spag_summary_md],
     )
 
     # Date range mode visibility
@@ -1122,6 +1667,18 @@ with gr.Blocks(
         on_dr_mode_change,
         inputs=[dr_mode_radio],
         outputs=[dr_n_col, dr_custom_col],
+    )
+
+    viz_mode_radio.change(
+        on_viz_mode_change,
+        inputs=[viz_mode_radio],
+        outputs=[single_mode_col, panel_mode_col, spag_mode_col],
+    )
+
+    single_y_dd.change(
+        on_single_y_change,
+        inputs=[app_state, single_y_dd, single_chart_dd],
+        outputs=[single_chart_dd, single_gate_md],
     )
 
     # Chart type conditional controls

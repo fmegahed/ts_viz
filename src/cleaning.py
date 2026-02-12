@@ -100,27 +100,30 @@ def suggest_date_columns(df: pd.DataFrame) -> list[str]:
     candidates: list[str] = []
 
     for col in df.columns:
+        name_has_token = bool(_DATE_NAME_TOKENS.search(str(col)))
+
         # 1. Already datetime
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             if col not in candidates:
                 candidates.append(col)
             continue
 
-        # 2. Parseable as datetime (check up to first 5 non-null values)
-        sample = df[col].dropna().head(5)
-        if not sample.empty:
+        # 2. Parseable as datetime (check a sample of non-null values)
+        sample = df[col].dropna().head(20)
+        if not sample.empty and (name_has_token or not pd.api.types.is_numeric_dtype(df[col])):
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", UserWarning)
-                    pd.to_datetime(sample)
-                if col not in candidates:
-                    candidates.append(col)
-                continue
+                    parsed = pd.to_datetime(sample, errors="coerce")
+                if parsed.notna().mean() >= 0.8:
+                    if col not in candidates:
+                        candidates.append(col)
+                    continue
             except (ValueError, TypeError, OverflowError):
                 pass
 
         # 3. Column name heuristic
-        if _DATE_NAME_TOKENS.search(str(col)):
+        if name_has_token:
             if col not in candidates:
                 candidates.append(col)
 
