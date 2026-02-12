@@ -113,9 +113,10 @@ def apply_miami_theme() -> None:
             gap: 0.5rem;
             align-items: flex-start;
         }}
-        .dev-avatar svg {{
-            width: 2em;
-            height: 2em;
+        .dev-avatar {{
+            width: 28px;
+            height: 28px;
+            min-width: 28px;
             fill: {_BLACK};
         }}
         .dev-name {{

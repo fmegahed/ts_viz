@@ -654,16 +654,12 @@ with st.sidebar:
             <span style="font-size:0.82rem; color:#000;">
                 ISA 444 &middot; Miami University
             </span>
-            <div style="margin-top:0.35rem; font-size:0.75rem; color:#000;">
-                Vibe-Coded by <strong>Fadel M. Megahed</strong><br>
-                Version <strong>0.2.0</strong>
-            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.divider()
-    st.subheader("Developer")
+    st.subheader("Vibe-Coded by:")
     st.markdown(
         """
         <div class="dev-card">
@@ -710,6 +706,7 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
+    st.caption("v0.2.0 &middot; Last updated Feb 2026")
     st.divider()
     st.header("Data Input")
 
@@ -852,6 +849,38 @@ if cleaned_df is None or not y_cols:
     st.write(
         "Upload a CSV or choose a demo dataset from the sidebar to get started."
     )
+
+    col_about, col_how = st.columns(2)
+    with col_about:
+        st.subheader("About")
+        st.markdown(
+            "An interactive app for **ISA 444** students at Miami University "
+            "to explore time-series data, create publication-quality charts, "
+            "and get AI-powered chart interpretation."
+        )
+        st.markdown(
+            "**Features:**\n"
+            "- Auto-detect delimiters, date columns, and numeric formats\n"
+            "- 9+ chart types: line, seasonal, ACF/PACF, decomposition, and more\n"
+            "- Multi-series support with panel and spaghetti plots\n"
+            "- AI chart interpretation via OpenAI vision\n"
+            "- Natural-language data filtering with QueryChat"
+        )
+    with col_how:
+        st.subheader("How to Use")
+        st.markdown(
+            "1. **Upload** a CSV file or pick a **demo dataset** from the sidebar\n"
+            "2. **Select** a date column and one or more value columns\n"
+            "3. **Choose** a chart type from the *Single Series* tab\n"
+            "4. Use the *Few Series* and *Many Series* tabs for multi-column comparisons\n"
+            "5. Expand **Summary Statistics** for descriptive stats and stationarity tests\n"
+            "6. Click **Interpret Chart with AI** to get AI-generated insights"
+        )
+        st.markdown(
+            "**Privacy:** All processing is in-memory. Only chart images "
+            "(never raw data) are sent to OpenAI when you click Interpret."
+        )
+
     st.stop()
 
 # If QueryChat is active, use its filtered df
