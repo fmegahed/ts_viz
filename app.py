@@ -106,8 +106,11 @@ _ANALYSIS_STATE_KEYS = [
     "tab_a_y", "dr_mode", "dr_n", "dr_custom",
     "chart_type_a", "pal_a", "color_by_a", "period_a", "window_a", "lag_a", "decomp_a",
     "_single_df_plot", "_single_fig", "_single_active_y", "_single_chart_type",
+    "_single_input_key", "_single_stats",
     "panel_cols", "panel_chart", "panel_shared", "pal_b", "_panel_fig",
+    "_panel_input_key", "_panel_summary_df",
     "spag_cols", "spag_alpha", "spag_topn", "spag_highlight", "spag_median", "pal_c", "_spag_fig",
+    "_spag_input_key", "_spag_summary_df",
 ]
 
 
@@ -208,53 +211,49 @@ def _data_quality_fragment(report: CleaningReport | None) -> None:
 @st.fragment
 def _single_chart_fragment(working_df, date_col, y_cols, freq_info, style_dict):
     if len(y_cols) == 1:
-        active_y = y_cols[0]
-    else:
-        active_y = st.selectbox("Select value column", y_cols, key="tab_a_y")
+        st.session_state["tab_a_y"] = y_cols[0]
+    elif st.session_state.get("tab_a_y") not in y_cols:
+        st.session_state["tab_a_y"] = y_cols[0]
 
-    # ---- Date range filter ------------------------------------------------
-    dr_mode = st.radio(
-        "Date range",
-        ["All", "Last N years", "Custom"],
-        horizontal=True,
-        key="dr_mode",
-    )
-    df_plot = working_df.copy()
-    if dr_mode == "Last N years":
-        n_years = st.slider("Years", 1, 20, 5, key="dr_n")
-        cutoff = df_plot[date_col].max() - pd.DateOffset(years=n_years)
-        df_plot = df_plot[df_plot[date_col] >= cutoff]
-    elif dr_mode == "Custom":
-        d_min = df_plot[date_col].min().date()
-        d_max = df_plot[date_col].max().date()
-        sel = st.slider("Date range", d_min, d_max, (d_min, d_max), key="dr_custom")
-        df_plot = df_plot[
-            (df_plot[date_col].dt.date >= sel[0])
-            & (df_plot[date_col].dt.date <= sel[1])
-        ]
+    with st.form("single_chart_form", border=False):
+        if len(y_cols) == 1:
+            active_y = y_cols[0]
+            st.caption(f"Value column: `{active_y}`")
+        else:
+            active_y = st.selectbox("Select value column", y_cols, key="tab_a_y")
 
-    if df_plot.empty:
-        st.warning("No data in selected range.")
-        st.session_state["_single_df_plot"] = None
-        st.session_state["_single_fig"] = None
-        st.session_state["_single_active_y"] = None
-        st.session_state["_single_chart_type"] = None
-        return
+        dr_mode = st.radio(
+            "Date range",
+            ["All", "Last N years", "Custom"],
+            horizontal=True,
+            key="dr_mode",
+        )
 
-    # ---- Chart controls ---------------------------------------------------
-    col_chart, col_opts = st.columns([2, 1])
-    with col_opts:
+        df_plot = working_df.copy()
+        n_years = st.session_state.get("dr_n", 5)
+        sel = st.session_state.get("dr_custom")
+
+        if dr_mode == "Last N years":
+            n_years = st.slider("Years", 1, 20, 5, key="dr_n")
+            cutoff = df_plot[date_col].max() - pd.DateOffset(years=n_years)
+            df_plot = df_plot[df_plot[date_col] >= cutoff]
+        elif dr_mode == "Custom":
+            d_min = df_plot[date_col].min().date()
+            d_max = df_plot[date_col].max().date()
+            sel = st.slider("Date range", d_min, d_max, (d_min, d_max), key="dr_custom")
+            df_plot = df_plot[
+                (df_plot[date_col].dt.date >= sel[0])
+                & (df_plot[date_col].dt.date <= sel[1])
+            ]
+
         chart_type = st.selectbox("Chart type", _CHART_TYPES, key="chart_type_a")
-
         palette_name = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_a")
-        n_colors = max(12, len(y_cols))
-        palette_colors = get_palette_colors(palette_name, n_colors)
+        palette_colors = get_palette_colors(palette_name, max(12, len(y_cols)))
         swatch_fig = render_palette_preview(palette_colors[:8])
         st.pyplot(swatch_fig, width="stretch")
 
-        # Color-by control (for colored markers chart)
         color_by = None
-        if chart_type == "Line â€“ Colored Markers":
+        if "Colored Markers" in chart_type:
             if "month" in working_df.columns:
                 color_by = st.selectbox(
                     "Color by",
@@ -262,16 +261,10 @@ def _single_chart_fragment(working_df, date_col, y_cols, freq_info, style_dict):
                     key="color_by_a",
                 )
             else:
-                other_cols = [
-                    c for c in working_df.columns
-                    if c not in (date_col, active_y)
-                ][:5]
+                other_cols = [c for c in working_df.columns if c not in (date_col, active_y)][:5]
                 if other_cols:
-                    color_by = st.selectbox(
-                        "Color by", other_cols, key="color_by_a",
-                    )
+                    color_by = st.selectbox("Color by", other_cols, key="color_by_a")
 
-        # Chart-specific controls
         period_label = "month"
         window_size = 12
         lag_val = 1
@@ -279,121 +272,139 @@ def _single_chart_fragment(working_df, date_col, y_cols, freq_info, style_dict):
 
         if chart_type in ("Seasonal Plot", "Seasonal Sub-series"):
             period_label = st.selectbox("Period", ["month", "quarter"], key="period_a")
-
         if chart_type == "Rolling Mean Overlay":
             window_size = st.slider("Window", 2, 52, 12, key="window_a")
-
         if chart_type == "Lag Plot":
             lag_val = st.slider("Lag", 1, 52, 1, key="lag_a")
-
         if chart_type == "Decomposition":
             decomp_model = st.selectbox("Model", ["additive", "multiplicative"], key="decomp_a")
 
-    # ---- Render chart -----------------------------------------------------
-    with col_chart:
+        update_single = st.form_submit_button("Update chart", use_container_width=True)
+
+    input_key = (
+        _df_hash(working_df), active_y, dr_mode, n_years, sel,
+        chart_type, palette_name, color_by, period_label, window_size, lag_val, decomp_model,
+        freq_info.label if freq_info else None,
+    )
+    should_compute = update_single or st.session_state.get("_single_fig") is None
+
+    if should_compute:
         fig = None
-        try:
-            if chart_type == "Line with Markers":
-                fig = plot_line_with_markers(
-                    df_plot, date_col, active_y,
-                    title=f"{active_y} over Time",
-                    style_dict=style_dict, palette_colors=palette_colors,
-                )
+        stats = None
 
-            elif chart_type == "Line â€“ Colored Markers" and color_by is not None:
-                fig = plot_line_colored_markers(
-                    df_plot, date_col, active_y,
-                    color_by=color_by, palette_colors=palette_colors,
-                    title=f"{active_y} colored by {color_by}",
-                    style_dict=style_dict,
-                )
+        if df_plot.empty:
+            st.warning("No data in selected range.")
+        else:
+            try:
+                if chart_type == "Line with Markers":
+                    fig = plot_line_with_markers(
+                        df_plot, date_col, active_y,
+                        title=f"{active_y} over Time",
+                        style_dict=style_dict, palette_colors=palette_colors,
+                    )
 
-            elif chart_type == "Seasonal Plot":
-                fig = plot_seasonal(
-                    df_plot, date_col, active_y,
-                    period=period_label,
-                    palette_name_colors=palette_colors,
-                    title=f"Seasonal Plot â€“ {active_y}",
-                    style_dict=style_dict,
-                )
+                elif "Colored Markers" in chart_type and color_by is not None:
+                    fig = plot_line_colored_markers(
+                        df_plot, date_col, active_y,
+                        color_by=color_by, palette_colors=palette_colors,
+                        title=f"{active_y} colored by {color_by}",
+                        style_dict=style_dict,
+                    )
 
-            elif chart_type == "Seasonal Sub-series":
-                fig = plot_seasonal_subseries(
-                    df_plot, date_col, active_y,
-                    period=period_label,
-                    title=f"Seasonal Sub-series â€“ {active_y}",
-                    style_dict=style_dict, palette_colors=palette_colors,
-                )
+                elif chart_type == "Seasonal Plot":
+                    fig = plot_seasonal(
+                        df_plot, date_col, active_y,
+                        period=period_label,
+                        palette_name_colors=palette_colors,
+                        title=f"Seasonal Plot - {active_y}",
+                        style_dict=style_dict,
+                    )
 
-            elif chart_type == "ACF / PACF":
-                series = df_plot[active_y].dropna()
-                acf_vals, acf_ci, pacf_vals, pacf_ci = compute_acf_pacf(series)
-                fig = plot_acf_pacf(
-                    acf_vals, acf_ci, pacf_vals, pacf_ci,
-                    title=f"ACF / PACF â€“ {active_y}",
-                    style_dict=style_dict,
-                )
+                elif chart_type == "Seasonal Sub-series":
+                    fig = plot_seasonal_subseries(
+                        df_plot, date_col, active_y,
+                        period=period_label,
+                        title=f"Seasonal Sub-series - {active_y}",
+                        style_dict=style_dict, palette_colors=palette_colors,
+                    )
 
-            elif chart_type == "Decomposition":
-                period_int = None
-                if freq_info and freq_info.label == "Monthly":
-                    period_int = 12
-                elif freq_info and freq_info.label == "Quarterly":
-                    period_int = 4
-                elif freq_info and freq_info.label == "Weekly":
-                    period_int = 52
-                elif freq_info and freq_info.label == "Daily":
-                    period_int = 365
+                elif chart_type == "ACF / PACF":
+                    series = df_plot[active_y].dropna()
+                    acf_vals, acf_ci, pacf_vals, pacf_ci = compute_acf_pacf(series)
+                    fig = plot_acf_pacf(
+                        acf_vals, acf_ci, pacf_vals, pacf_ci,
+                        title=f"ACF / PACF - {active_y}",
+                        style_dict=style_dict,
+                    )
 
-                result = compute_decomposition(
-                    df_plot, date_col, active_y,
-                    model=decomp_model, period=period_int,
-                )
-                fig = plot_decomposition(
-                    result,
-                    title=f"Decomposition â€“ {active_y} ({decomp_model})",
-                    style_dict=style_dict,
-                )
+                elif chart_type == "Decomposition":
+                    period_int = None
+                    if freq_info and freq_info.label == "Monthly":
+                        period_int = 12
+                    elif freq_info and freq_info.label == "Quarterly":
+                        period_int = 4
+                    elif freq_info and freq_info.label == "Weekly":
+                        period_int = 52
+                    elif freq_info and freq_info.label == "Daily":
+                        period_int = 365
 
-            elif chart_type == "Rolling Mean Overlay":
-                fig = plot_rolling_overlay(
-                    df_plot, date_col, active_y,
-                    window=window_size,
-                    title=f"Rolling {window_size}-pt Mean â€“ {active_y}",
-                    style_dict=style_dict, palette_colors=palette_colors,
-                )
+                    result = compute_decomposition(
+                        df_plot, date_col, active_y,
+                        model=decomp_model, period=period_int,
+                    )
+                    fig = plot_decomposition(
+                        result,
+                        title=f"Decomposition - {active_y} ({decomp_model})",
+                        style_dict=style_dict,
+                    )
 
-            elif chart_type == "Year-over-Year Change":
-                yoy_result = compute_yoy_change(df_plot, date_col, active_y)
-                yoy_df = pd.DataFrame({
-                    "date": yoy_result[date_col],
-                    "abs_change": yoy_result["yoy_abs_change"],
-                    "pct_change": yoy_result["yoy_pct_change"],
-                }).dropna()
-                fig = plot_yoy_change(
-                    df_plot, date_col, active_y, yoy_df,
-                    title=f"Year-over-Year Change â€“ {active_y}",
-                    style_dict=style_dict,
-                )
+                elif chart_type == "Rolling Mean Overlay":
+                    fig = plot_rolling_overlay(
+                        df_plot, date_col, active_y,
+                        window=window_size,
+                        title=f"Rolling {window_size}-pt Mean - {active_y}",
+                        style_dict=style_dict, palette_colors=palette_colors,
+                    )
 
-            elif chart_type == "Lag Plot":
-                fig = plot_lag(
-                    df_plot[active_y],
-                    lag=lag_val,
-                    title=f"Lag-{lag_val} Plot â€“ {active_y}",
-                    style_dict=style_dict,
-                )
+                elif chart_type == "Year-over-Year Change":
+                    yoy_result = compute_yoy_change(df_plot, date_col, active_y)
+                    yoy_df = pd.DataFrame({
+                        "date": yoy_result[date_col],
+                        "abs_change": yoy_result["yoy_abs_change"],
+                        "pct_change": yoy_result["yoy_pct_change"],
+                    }).dropna()
+                    fig = plot_yoy_change(
+                        df_plot, date_col, active_y, yoy_df,
+                        title=f"Year-over-Year Change - {active_y}",
+                        style_dict=style_dict,
+                    )
 
-        except Exception as exc:
-            st.error(f"Chart error: {exc}")
+                elif chart_type == "Lag Plot":
+                    fig = plot_lag(
+                        df_plot[active_y],
+                        lag=lag_val,
+                        title=f"Lag-{lag_val} Plot - {active_y}",
+                        style_dict=style_dict,
+                    )
 
-        if fig is not None:
-            st.pyplot(fig, width="stretch")
+            except Exception as exc:
+                st.error(f"Chart error: {exc}")
 
-    st.session_state["_single_df_plot"] = df_plot
-    st.session_state["_single_fig"] = fig
-    st.session_state["_single_active_y"] = active_y
-    st.session_state["_single_chart_type"] = chart_type
+            if fig is not None:
+                stats = compute_summary_stats(df_plot, date_col, active_y)
+
+        st.session_state["_single_input_key"] = input_key
+        st.session_state["_single_df_plot"] = df_plot if not df_plot.empty else None
+        st.session_state["_single_fig"] = fig
+        st.session_state["_single_active_y"] = active_y if not df_plot.empty else None
+        st.session_state["_single_chart_type"] = chart_type if not df_plot.empty else None
+        st.session_state["_single_stats"] = stats
+
+    fig = st.session_state.get("_single_fig")
+    if fig is not None:
+        st.pyplot(fig, width="stretch")
+    else:
+        st.info("Choose options above, then click `Update chart`.")
 
 
 @st.fragment
@@ -402,16 +413,14 @@ def _single_insights_fragment(freq_info, date_col):
     active_y = st.session_state.get("_single_active_y")
     chart_type = st.session_state.get("_single_chart_type")
     fig = st.session_state.get("_single_fig")
+    stats = st.session_state.get("_single_stats")
 
-    if df_plot is None or active_y is None:
+    if df_plot is None or active_y is None or stats is None:
         return
 
-    # ---- Summary stats expander -------------------------------------------
     with st.expander("Summary Statistics", expanded=False):
-        stats = compute_summary_stats(df_plot, date_col, active_y)
         _render_summary_stats(stats)
 
-    # ---- AI Interpretation ------------------------------------------------
     _render_ai_interpretation(
         fig, chart_type, freq_info, df_plot, date_col, active_y, "interpret_a",
     )
@@ -422,6 +431,7 @@ def _panel_chart_fragment(working_df, date_col, y_cols, style_dict):
     if len(y_cols) < 2:
         st.info("Select 2+ value columns in the sidebar to use panel plots.")
         st.session_state["_panel_fig"] = None
+        st.session_state["_panel_summary_df"] = None
         return
 
     st.subheader("Panel Plot (Small Multiples)")
@@ -429,42 +439,52 @@ def _panel_chart_fragment(working_df, date_col, y_cols, style_dict):
     if "panel_cols" not in st.session_state:
         st.session_state["panel_cols"] = y_cols[:4]
     else:
-        st.session_state["panel_cols"] = [
-            c for c in st.session_state["panel_cols"] if c in y_cols
-        ]
-    panel_cols = st.multiselect("Columns to plot", y_cols, key="panel_cols")
+        st.session_state["panel_cols"] = [c for c in st.session_state["panel_cols"] if c in y_cols]
 
-    if panel_cols:
+    with st.form("panel_chart_form", border=False):
+        panel_cols = st.multiselect("Columns to plot", y_cols, key="panel_cols")
+
         pc1, pc2 = st.columns(2)
         with pc1:
-            panel_chart = st.selectbox(
-                "Chart type", ["line", "bar"], key="panel_chart"
-            )
+            panel_chart = st.selectbox("Chart type", ["line", "bar"], key="panel_chart")
         with pc2:
             if "panel_shared" not in st.session_state:
                 st.session_state["panel_shared"] = True
             shared_y = st.checkbox("Shared Y axis", key="panel_shared")
 
         palette_name_b = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_b")
-        palette_b = get_palette_colors(palette_name_b, len(panel_cols))
+        update_panel = st.form_submit_button("Update chart", use_container_width=True)
 
+    input_key = (_df_hash(working_df), tuple(panel_cols), panel_chart, shared_y, palette_name_b)
+    should_compute = update_panel or st.session_state.get("_panel_fig") is None
+
+    if should_compute:
         fig_panel = None
-        try:
-            fig_panel = plot_panel(
-                working_df, date_col, panel_cols,
-                chart_type=panel_chart,
-                shared_y=shared_y,
-                title="Panel Comparison",
-                style_dict=style_dict,
-                palette_colors=palette_b,
-            )
-            st.pyplot(fig_panel, width="stretch")
-        except Exception as exc:
-            st.error(f"Panel chart error: {exc}")
+        summary_df = None
+        if panel_cols:
+            palette_b = get_palette_colors(palette_name_b, len(panel_cols))
+            try:
+                fig_panel = plot_panel(
+                    working_df, date_col, panel_cols,
+                    chart_type=panel_chart,
+                    shared_y=shared_y,
+                    title="Panel Comparison",
+                    style_dict=style_dict,
+                    palette_colors=palette_b,
+                )
+                summary_df = compute_multi_series_summary(working_df, date_col, panel_cols)
+            except Exception as exc:
+                st.error(f"Panel chart error: {exc}")
 
+        st.session_state["_panel_input_key"] = input_key
         st.session_state["_panel_fig"] = fig_panel
+        st.session_state["_panel_summary_df"] = summary_df
+
+    fig_panel = st.session_state.get("_panel_fig")
+    if fig_panel is not None:
+        st.pyplot(fig_panel, width="stretch")
     else:
-        st.session_state["_panel_fig"] = None
+        st.info("Choose panel options above, then click `Update chart`.")
 
 
 @st.fragment
@@ -472,15 +492,12 @@ def _panel_insights_fragment(working_df, date_col, freq_info):
     panel_cols = st.session_state.get("panel_cols") or []
     fig_panel = st.session_state.get("_panel_fig")
     panel_chart = st.session_state.get("panel_chart", "line")
+    summary_df = st.session_state.get("_panel_summary_df")
 
-    if not panel_cols:
+    if not panel_cols or fig_panel is None or summary_df is None:
         return
 
-    # Per-series summary table
     with st.expander("Per-series Summary", expanded=False):
-        summary_df = compute_multi_series_summary(
-            working_df, date_col, panel_cols,
-        )
         st.dataframe(
             summary_df.style.format({
                 "mean": "{:,.2f}",
@@ -493,7 +510,6 @@ def _panel_insights_fragment(working_df, date_col, freq_info):
             width="stretch",
         )
 
-    # AI Interpretation
     _render_ai_interpretation(
         fig_panel, f"Panel ({panel_chart})", freq_info,
         working_df, date_col, ", ".join(panel_cols), "interpret_b",
@@ -505,6 +521,7 @@ def _spaghetti_chart_fragment(working_df, date_col, y_cols, style_dict):
     if len(y_cols) < 2:
         st.info("Select 2+ value columns in the sidebar to use spaghetti plots.")
         st.session_state["_spag_fig"] = None
+        st.session_state["_spag_summary_df"] = None
         return
 
     st.subheader("Spaghetti Plot")
@@ -512,12 +529,11 @@ def _spaghetti_chart_fragment(working_df, date_col, y_cols, style_dict):
     if "spag_cols" not in st.session_state:
         st.session_state["spag_cols"] = list(y_cols)
     else:
-        st.session_state["spag_cols"] = [
-            c for c in st.session_state["spag_cols"] if c in y_cols
-        ]
-    spag_cols = st.multiselect("Columns to include", y_cols, key="spag_cols")
+        st.session_state["spag_cols"] = [c for c in st.session_state["spag_cols"] if c in y_cols]
 
-    if spag_cols:
+    with st.form("spag_chart_form", border=False):
+        spag_cols = st.multiselect("Columns to include", y_cols, key="spag_cols")
+
         sc1, sc2, sc3 = st.columns(3)
         with sc1:
             alpha_val = st.slider("Alpha", 0.05, 1.0, 0.15, 0.05, key="spag_alpha")
@@ -533,44 +549,56 @@ def _spaghetti_chart_fragment(working_df, date_col, y_cols, style_dict):
             highlight_col = highlight if highlight != "(none)" else None
 
         show_median = st.checkbox("Show Median + IQR band", key="spag_median")
-
         palette_name_c = st.selectbox("Color palette", _PALETTE_NAMES, key="pal_c")
-        palette_c = get_palette_colors(palette_name_c, len(spag_cols))
+        update_spag = st.form_submit_button("Update chart", use_container_width=True)
 
+    input_key = (
+        _df_hash(working_df), tuple(spag_cols), alpha_val, top_n, highlight_col,
+        show_median, palette_name_c,
+    )
+    should_compute = update_spag or st.session_state.get("_spag_fig") is None
+
+    if should_compute:
         fig_spag = None
-        try:
-            fig_spag = plot_spaghetti(
-                working_df, date_col, spag_cols,
-                alpha=alpha_val,
-                highlight_col=highlight_col,
-                top_n=top_n,
-                show_median_band=show_median,
-                title="Spaghetti Plot",
-                style_dict=style_dict,
-                palette_colors=palette_c,
-            )
-            st.pyplot(fig_spag, width="stretch")
-        except Exception as exc:
-            st.error(f"Spaghetti chart error: {exc}")
+        spag_summary = None
+        if spag_cols:
+            palette_c = get_palette_colors(palette_name_c, len(spag_cols))
+            try:
+                fig_spag = plot_spaghetti(
+                    working_df, date_col, spag_cols,
+                    alpha=alpha_val,
+                    highlight_col=highlight_col,
+                    top_n=top_n,
+                    show_median_band=show_median,
+                    title="Spaghetti Plot",
+                    style_dict=style_dict,
+                    palette_colors=palette_c,
+                )
+                spag_summary = compute_multi_series_summary(working_df, date_col, spag_cols)
+            except Exception as exc:
+                st.error(f"Spaghetti chart error: {exc}")
 
+        st.session_state["_spag_input_key"] = input_key
         st.session_state["_spag_fig"] = fig_spag
+        st.session_state["_spag_summary_df"] = spag_summary
+
+    fig_spag = st.session_state.get("_spag_fig")
+    if fig_spag is not None:
+        st.pyplot(fig_spag, width="stretch")
     else:
-        st.session_state["_spag_fig"] = None
+        st.info("Choose spaghetti options above, then click `Update chart`.")
 
 
 @st.fragment
 def _spaghetti_insights_fragment(working_df, date_col, freq_info):
     spag_cols = st.session_state.get("spag_cols") or []
     fig_spag = st.session_state.get("_spag_fig")
+    spag_summary = st.session_state.get("_spag_summary_df")
 
-    if not spag_cols:
+    if not spag_cols or fig_spag is None or spag_summary is None:
         return
 
-    # Per-series summary table
     with st.expander("Per-series Summary", expanded=False):
-        spag_summary = compute_multi_series_summary(
-            working_df, date_col, spag_cols,
-        )
         st.dataframe(
             spag_summary.style.format({
                 "mean": "{:,.2f}",
@@ -583,7 +611,6 @@ def _spaghetti_insights_fragment(working_df, date_col, freq_info):
             width="stretch",
         )
 
-    # AI Interpretation
     _render_ai_interpretation(
         fig_spag, "Spaghetti Plot", freq_info,
         working_df, date_col, ", ".join(spag_cols), "interpret_c",
