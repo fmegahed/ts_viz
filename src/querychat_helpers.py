@@ -95,11 +95,18 @@ def create_querychat(
         f"{freq_part}"
     )
 
+    # Build example bullets that reference actual column names
+    if y_cols:
+        first_y = y_cols[0]
+        filter_example = f'- "Filter where {first_y} > median"'
+    else:
+        filter_example = '- "Filter where value > 100"'
+
     greeting = (
         f"Hi! I can help you filter and explore the **{name}** dataset.  "
         "Try asking me something like:\n"
-        '- "Show only 2023 data"\n'
-        '- "Filter where sales > 60000"\n'
+        '- "Show only the last 5 years"\n'
+        f"{filter_example}\n"
         '- "Show rows from January to March"'
     )
 

@@ -572,12 +572,22 @@ def plot_panel(
         )
         flat_axes = axes.flatten()
 
+        # Compute a sensible bar width from the median date spacing
+        bar_width = None
+        if chart_type == "bar":
+            dates_sorted = df[date_col].dropna().sort_values()
+            if len(dates_sorted) >= 2:
+                median_gap = dates_sorted.diff().dropna().median()
+                bar_width = median_gap * 0.9
+            else:
+                bar_width = 1
+
         for i, col in enumerate(y_cols):
             ax = flat_axes[i]
             color = _default_color(palette_colors, i)
 
             if chart_type == "bar":
-                ax.bar(df[date_col], df[col], color=color, width=2, edgecolor="white", linewidth=0.3)
+                ax.bar(df[date_col], df[col], width=bar_width, color=color, alpha=0.85, edgecolor="white", linewidth=0.3)
             else:
                 ax.plot(df[date_col], df[col], linewidth=1.3, color=color)
 

@@ -33,6 +33,8 @@ from src.cleaning import (
     clean_dataframe,
     detect_frequency,
     add_time_features,
+    detect_long_format,
+    pivot_long_to_wide,
     CleaningReport,
     FrequencyInfo,
 )
@@ -74,9 +76,9 @@ from src.querychat_helpers import (
 # ---------------------------------------------------------------------------
 _DATA_DIR = Path(__file__).parent / "data"
 _DEMO_FILES = {
-    "Monthly Retail Sales (single)": _DATA_DIR / "demo_single.csv",
-    "Quarterly Revenue by Region (wide)": _DATA_DIR / "demo_multi_wide.csv",
-    "Daily Stock Prices – 20 Tickers (long)": _DATA_DIR / "demo_multi_long.csv",
+    "Ohio Unemployment Rate (single, monthly)": _DATA_DIR / "demo_ohio_unemployment.csv",
+    "Manufacturing Employment by State (wide, monthly)": _DATA_DIR / "demo_manufacturing_wide.csv",
+    "Manufacturing Employment by State (long, monthly)": _DATA_DIR / "demo_manufacturing_long.csv",
 }
 
 _CHART_TYPES = [
@@ -185,7 +187,7 @@ def _single_chart_fragment(working_df, date_col, y_cols, freq_info, style_dict):
         n_colors = max(12, len(y_cols))
         palette_colors = get_palette_colors(palette_name, n_colors)
         swatch_fig = render_palette_preview(palette_colors[:8])
-        st.pyplot(swatch_fig, use_container_width=True)
+        st.pyplot(swatch_fig, width="stretch")
 
         # Color-by control (for colored markers chart)
         color_by = None
@@ -323,7 +325,7 @@ def _single_chart_fragment(working_df, date_col, y_cols, freq_info, style_dict):
             st.error(f"Chart error: {exc}")
 
         if fig is not None:
-            st.pyplot(fig, use_container_width=True)
+            st.pyplot(fig, width="stretch")
 
     st.session_state["_single_df_plot"] = df_plot
     st.session_state["_single_fig"] = fig
@@ -393,7 +395,7 @@ def _panel_chart_fragment(working_df, date_col, y_cols, style_dict):
                 style_dict=style_dict,
                 palette_colors=palette_b,
             )
-            st.pyplot(fig_panel, use_container_width=True)
+            st.pyplot(fig_panel, width="stretch")
         except Exception as exc:
             st.error(f"Panel chart error: {exc}")
 
@@ -425,7 +427,7 @@ def _panel_insights_fragment(working_df, date_col, freq_info):
                 "trend_slope": "{:,.4f}",
                 "adf_pvalue": "{:.4f}",
             }),
-            use_container_width=True,
+            width="stretch",
         )
 
     # AI Interpretation
@@ -484,7 +486,7 @@ def _spaghetti_chart_fragment(working_df, date_col, y_cols, style_dict):
                 style_dict=style_dict,
                 palette_colors=palette_c,
             )
-            st.pyplot(fig_spag, use_container_width=True)
+            st.pyplot(fig_spag, width="stretch")
         except Exception as exc:
             st.error(f"Spaghetti chart error: {exc}")
 
@@ -515,7 +517,7 @@ def _spaghetti_insights_fragment(working_df, date_col, freq_info):
                 "trend_slope": "{:,.4f}",
                 "adf_pvalue": "{:.4f}",
             }),
-            use_container_width=True,
+            width="stretch",
         )
 
     # AI Interpretation
@@ -634,9 +636,10 @@ style_dict = get_miami_mpl_style()
 # Session state initialisation
 # ---------------------------------------------------------------------------
 for key in [
-    "raw_df", "cleaned_df", "cleaning_report", "freq_info",
+    "raw_df", "raw_df_original", "cleaned_df", "cleaning_report", "freq_info",
     "date_col", "y_cols", "qc", "qc_hash",
     "_upload_id", "_upload_delim", "_clean_key",
+    "_prev_data_format", "_prev_pivot_key",
 ]:
     if key not in st.session_state:
         st.session_state[key] = None
@@ -719,43 +722,141 @@ with st.sidebar:
     )
 
     # Load data
+    def _on_new_data(df: pd.DataFrame) -> None:
+        """Store new dataset and clear stale format/pivot keys."""
+        st.session_state.raw_df_original = df
+        st.session_state.raw_df = df
+        # Clear format-related keys so auto-detection runs fresh
+        for _k in ("sidebar_data_format", "sidebar_group_col",
+                    "sidebar_value_col", "sidebar_y_cols",
+                    "_prev_data_format", "_prev_pivot_key"):
+            st.session_state.pop(_k, None)
+
     if uploaded is not None:
         file_id = (uploaded.name, uploaded.size)
         if st.session_state.get("_upload_id") != file_id:
             df_raw, delim = read_csv_upload(uploaded)
-            st.session_state.raw_df = df_raw
+            _on_new_data(df_raw)
             st.session_state._upload_delim = delim
             st.session_state._upload_id = file_id
         st.caption(f"Detected delimiter: `{repr(st.session_state._upload_delim)}`")
     elif demo_choice != "(none)":
         demo_key = ("demo", demo_choice)
         if st.session_state.get("_upload_id") != demo_key:
-            st.session_state.raw_df = _load_demo(_DEMO_FILES[demo_choice])
+            _on_new_data(_load_demo(_DEMO_FILES[demo_choice]))
             st.session_state._upload_id = demo_key
     # else: keep whatever was already in session state
 
+    raw_df_orig: pd.DataFrame | None = st.session_state.raw_df_original
     raw_df: pd.DataFrame | None = st.session_state.raw_df
 
-    if raw_df is not None:
+    if raw_df_orig is not None:
         st.divider()
         st.subheader("Column Selection")
 
-        # Auto-suggest
-        date_suggestions = suggest_date_columns(raw_df)
-        numeric_suggestions = suggest_numeric_columns(raw_df)
+        # Auto-suggest on the *original* (possibly long) DataFrame
+        date_suggestions = suggest_date_columns(raw_df_orig)
 
-        all_cols = list(raw_df.columns)
-        default_date_idx = all_cols.index(date_suggestions[0]) if date_suggestions else 0
+        all_cols = list(raw_df_orig.columns)
+        default_date_idx = (
+            all_cols.index(date_suggestions[0]) if date_suggestions else 0
+        )
 
         if "sidebar_date_col" not in st.session_state:
             st.session_state["sidebar_date_col"] = all_cols[default_date_idx]
         date_col = st.selectbox("Date column", all_cols, key="sidebar_date_col")
 
-        remaining = [c for c in all_cols if c != date_col]
-        default_y = [c for c in numeric_suggestions if c != date_col]
+        # ---- Auto-detect long vs wide format ---------------------------------
+        is_long, auto_group, auto_value = detect_long_format(raw_df_orig, date_col)
+
+        if "sidebar_data_format" not in st.session_state:
+            st.session_state["sidebar_data_format"] = "Long" if is_long else "Wide"
+
+        data_format = st.radio(
+            "Data format",
+            ["Wide", "Long"],
+            key="sidebar_data_format",
+            horizontal=True,
+        )
+
+        # When format radio changes, clear y_cols so the multiselect resets
+        if st.session_state.get("_prev_data_format") != data_format:
+            st.session_state.pop("sidebar_y_cols", None)
+            st.session_state["_prev_data_format"] = data_format
+
+        # ---- Build effective (wide) DataFrame --------------------------------
+        if data_format == "Long":
+            # Columns eligible for group (string/object) and value (numeric)
+            other_cols = [c for c in all_cols if c != date_col]
+            string_cols = [
+                c for c in other_cols
+                if raw_df_orig[c].dtype == object
+                or pd.api.types.is_string_dtype(raw_df_orig[c])
+            ]
+            numeric_cols = [
+                c for c in other_cols
+                if pd.api.types.is_numeric_dtype(raw_df_orig[c])
+            ]
+
+            if "sidebar_group_col" not in st.session_state:
+                st.session_state["sidebar_group_col"] = (
+                    auto_group if auto_group and auto_group in string_cols
+                    else (string_cols[0] if string_cols else None)
+                )
+            group_col = st.selectbox(
+                "Group column", string_cols, key="sidebar_group_col",
+            )
+
+            value_options = [c for c in numeric_cols if c != group_col]
+            if "sidebar_value_col" not in st.session_state:
+                st.session_state["sidebar_value_col"] = (
+                    auto_value if auto_value and auto_value in value_options
+                    else (value_options[0] if value_options else None)
+                )
+            value_col_sel = st.selectbox(
+                "Value column", value_options, key="sidebar_value_col",
+            )
+
+            # Clear y_cols when group/value changes
+            pivot_key = (group_col, value_col_sel)
+            if st.session_state.get("_prev_pivot_key") != pivot_key:
+                st.session_state.pop("sidebar_y_cols", None)
+                st.session_state["_prev_pivot_key"] = pivot_key
+
+            if group_col and value_col_sel:
+                effective_df = pivot_long_to_wide(
+                    raw_df_orig, date_col, group_col, value_col_sel,
+                )
+                n_groups = raw_df_orig[group_col].nunique()
+                st.caption(f"Pivoted **{n_groups}** groups from `{group_col}`")
+                available_y = [c for c in effective_df.columns if c != date_col]
+            else:
+                effective_df = raw_df_orig
+                available_y = []
+        else:
+            # Wide format — same as before
+            effective_df = raw_df_orig
+            numeric_suggestions = suggest_numeric_columns(raw_df_orig)
+            available_y = [c for c in numeric_suggestions if c != date_col]
+
+        # ---- Y-columns multiselect (shared by both paths) --------------------
+        # Filter any stale stored y_cols against current available options
+        if "sidebar_y_cols" in st.session_state:
+            st.session_state["sidebar_y_cols"] = [
+                c for c in st.session_state["sidebar_y_cols"]
+                if c in available_y
+            ]
         if "sidebar_y_cols" not in st.session_state:
-            st.session_state["sidebar_y_cols"] = default_y[:4] if default_y else []
-        y_cols = st.multiselect("Value column(s)", remaining, key="sidebar_y_cols")
+            st.session_state["sidebar_y_cols"] = (
+                available_y[:4] if available_y else []
+            )
+        y_cols = st.multiselect(
+            "Value column(s)", available_y, key="sidebar_y_cols",
+        )
+
+        # Push effective (wide) df into raw_df for the cleaning pipeline
+        st.session_state.raw_df = effective_df
+        raw_df = effective_df
 
         st.session_state.date_col = date_col
         st.session_state.y_cols = y_cols
@@ -913,9 +1014,10 @@ if cleaned_df is None or not y_cols:
             icon="\U0001f512",
         )
         st.info(
-            "**Demo Datasets** — Three built-in datasets are available in the sidebar: "
-            "monthly retail sales (single series), quarterly revenue by region (wide), "
-            "and daily stock prices with 20 tickers (long).",
+            "**Demo Datasets** — Three built-in FRED datasets are available in the sidebar: "
+            "Ohio Unemployment Rate (single series), Manufacturing Employment for five "
+            "states in wide format, and the same data in long/stacked format. "
+            "All sourced from the Federal Reserve Economic Data (FRED).",
             icon="\U0001f4ca",
         )
 

@@ -93,14 +93,16 @@ def apply_miami_theme() -> None:
             background-color: {_LIGHT_GRAY};
             box-shadow: inset 4px 0 0 0 {MIAMI_RED};
             border-radius: 6px;
+            padding: 0.6rem 0.75rem 0.6rem 1rem;
         }}
         div[data-testid="stMetric"] label {{
             color: {_BLACK};
-            font-size: 0.85rem;
+            font-size: 0.78rem;
         }}
         div[data-testid="stMetric"] div[data-testid="stMetricValue"] {{
             color: {_BLACK};
             font-weight: 700;
+            font-size: 0.95rem;
         }}
 
         /* ---- Sidebar developer card ---- */
@@ -136,15 +138,17 @@ def apply_miami_theme() -> None:
             flex-wrap: wrap;
             margin-top: 0.35rem;
         }}
-        .dev-link {{
+        .dev-link,
+        .dev-link:visited,
+        .dev-link:link {{
             display: inline-flex;
             align-items: center;
             gap: 0.2rem;
             padding: 0.15rem 0.4rem;
-            border: 1px solid #dee2e6;
+            border: 1px solid {MIAMI_RED};
             border-radius: 4px;
             font-size: 0.65rem;
-            color: {_BLACK};
+            color: {MIAMI_RED} !important;
             text-decoration: none;
             background: {_WHITE};
             line-height: 1.4;
@@ -153,11 +157,14 @@ def apply_miami_theme() -> None:
         .dev-link svg {{
             width: 11px;
             height: 11px;
-            fill: currentColor;
+            fill: {MIAMI_RED};
         }}
         .dev-link:hover {{
-            border-color: {MIAMI_RED};
-            color: {MIAMI_RED};
+            background-color: {MIAMI_RED};
+            color: {_WHITE} !important;
+        }}
+        .dev-link:hover svg {{
+            fill: {_WHITE};
         }}
     </style>
     """

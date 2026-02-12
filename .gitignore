@@ -2,5 +2,7 @@
 .claude/
 __pycache__/
 requirements.md
+DEPLOY.md
 *.Rproj
 .Rproj.user/
+nul

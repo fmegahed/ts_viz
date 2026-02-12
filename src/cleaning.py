@@ -10,6 +10,7 @@ calendar-feature extraction.
 import csv
 import io
 import re
+import warnings
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -109,7 +110,9 @@ def suggest_date_columns(df: pd.DataFrame) -> list[str]:
         sample = df[col].dropna().head(5)
         if not sample.empty:
             try:
-                pd.to_datetime(sample)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", UserWarning)
+                    pd.to_datetime(sample)
                 if col not in candidates:
                     candidates.append(col)
                 continue
@@ -309,6 +312,94 @@ def detect_frequency(df: pd.DataFrame, date_col: str) -> FrequencyInfo:
         label = "Irregular"
 
     return FrequencyInfo(label=label, median_delta=median_delta, is_regular=is_regular)
+
+
+# ---------------------------------------------------------------------------
+# Calendar feature extraction
+# ---------------------------------------------------------------------------
+
+def detect_long_format(
+    df: pd.DataFrame,
+    date_col: str,
+) -> tuple[bool, str | None, str | None]:
+    """Heuristic: detect whether *df* is in long (stacked) format.
+
+    Returns ``(is_long, group_col, value_col)``.
+
+    A DataFrame is flagged as *long* when the date column contains
+    duplicate values **and** there is at least one string/object column
+    among the remaining columns (the likely group identifier).
+    """
+    if date_col not in df.columns:
+        return False, None, None
+
+    dates = df[date_col]
+    if dates.nunique() >= len(dates):
+        # Every date is unique → wide format
+        return False, None, None
+
+    remaining = [c for c in df.columns if c != date_col]
+
+    # Find first string/object column → candidate group column
+    group_col: str | None = None
+    for c in remaining:
+        if df[c].dtype == object or pd.api.types.is_string_dtype(df[c]):
+            group_col = c
+            break
+
+    if group_col is None:
+        return False, None, None
+
+    # Find first numeric column (excluding the group column) → candidate value
+    value_col: str | None = None
+    for c in remaining:
+        if c == group_col:
+            continue
+        if pd.api.types.is_numeric_dtype(df[c]):
+            value_col = c
+            break
+
+    if value_col is None:
+        return False, None, None
+
+    return True, group_col, value_col
+
+
+def pivot_long_to_wide(
+    df: pd.DataFrame,
+    date_col: str,
+    group_col: str,
+    value_col: str,
+) -> pd.DataFrame:
+    """Pivot a long-format DataFrame to wide format.
+
+    Parameters
+    ----------
+    df:
+        Long-format dataframe.
+    date_col:
+        Column with date values (becomes the index/row key).
+    group_col:
+        Column whose unique values become the new column headers.
+    value_col:
+        Column with the numeric values to spread.
+
+    Returns
+    -------
+    pd.DataFrame
+        Wide dataframe with *date_col* as a regular column and one
+        column per unique value in *group_col*.
+    """
+    wide = df.pivot_table(
+        index=date_col,
+        columns=group_col,
+        values=value_col,
+        aggfunc="first",
+    )
+    # Flatten MultiIndex column names to plain strings
+    wide.columns = [str(c) for c in wide.columns]
+    wide = wide.reset_index()
+    return wide
 
 
 # ---------------------------------------------------------------------------
