@@ -102,6 +102,13 @@ _VIEW_SPECS = [
 _VIEW_LABELS = [label for label, _ in _VIEW_SPECS]
 _VIEW_SLUG_BY_LABEL = dict(_VIEW_SPECS)
 _VIEW_LABEL_BY_SLUG = {slug: label for label, slug in _VIEW_SPECS}
+_ANALYSIS_STATE_KEYS = [
+    "tab_a_y", "dr_mode", "dr_n", "dr_custom",
+    "chart_type_a", "pal_a", "color_by_a", "period_a", "window_a", "lag_a", "decomp_a",
+    "_single_df_plot", "_single_fig", "_single_active_y", "_single_chart_type",
+    "panel_cols", "panel_chart", "panel_shared", "pal_b", "_panel_fig",
+    "spag_cols", "spag_alpha", "spag_topn", "spag_highlight", "spag_median", "pal_c", "_spag_fig",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +152,26 @@ def _sync_view_query_param() -> None:
     active = st.session_state.get("active_view")
     if active in _VIEW_SLUG_BY_LABEL:
         st.query_params["view"] = _VIEW_SLUG_BY_LABEL[active]
+
+
+def _clear_analysis_state(reset_querychat: bool = False) -> None:
+    """Clear per-view chart controls/outputs."""
+    for key in _ANALYSIS_STATE_KEYS:
+        st.session_state.pop(key, None)
+    if reset_querychat:
+        st.session_state["qc"] = None
+        st.session_state["qc_hash"] = None
+        st.session_state["enable_querychat"] = False
+
+
+def _on_view_change() -> None:
+    """Reset chart/data-filter state when users switch analysis views."""
+    active = st.session_state.get("active_view")
+    prev = st.session_state.get("_prev_active_view")
+    if prev and prev != active:
+        _clear_analysis_state(reset_querychat=True)
+    st.session_state["_prev_active_view"] = active
+    _sync_view_query_param()
 
 
 @st.cache_data(show_spinner=False)
@@ -675,10 +702,13 @@ for key in [
     "raw_df", "raw_df_original", "cleaned_df", "cleaning_report", "freq_info",
     "date_col", "y_cols", "qc", "qc_hash",
     "_upload_id", "_upload_delim", "_clean_key",
-    "_prev_data_format", "_prev_pivot_key",
+    "_prev_data_format", "_prev_pivot_key", "_prev_active_view",
+    "setup_applied", "_last_applied_settings_key",
 ]:
     if key not in st.session_state:
         st.session_state[key] = None
+if st.session_state["setup_applied"] is None:
+    st.session_state["setup_applied"] = False
 
 # ---------------------------------------------------------------------------
 # Sidebar — Data input
@@ -697,8 +727,8 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    st.divider()
-    st.subheader("Vibe-Coded by:")
+    # st.divider()
+    st.subheader("Vibe-Coded By")
     st.markdown(
         """
         <div class="dev-card">
@@ -764,11 +794,24 @@ with st.sidebar:
         """Store new dataset and clear stale format/pivot keys."""
         st.session_state.raw_df_original = df
         st.session_state.raw_df = df
+        st.session_state.cleaned_df = None
+        st.session_state.cleaning_report = None
+        st.session_state.freq_info = None
+        st.session_state.date_col = None
+        st.session_state.y_cols = None
+        st.session_state._clean_key = None
+        st.session_state["setup_applied"] = False
+        st.session_state["_last_applied_settings_key"] = None
         # Clear format-related keys so auto-detection runs fresh
         for _k in ("sidebar_data_format", "sidebar_group_col",
                     "sidebar_value_col", "sidebar_y_cols",
-                    "_prev_data_format", "_prev_pivot_key"):
+                    "_prev_data_format", "_prev_pivot_key",
+                    "sidebar_dup_action", "sidebar_missing_action", "sidebar_freq_override"):
             st.session_state.pop(_k, None)
+        _clear_analysis_state(reset_querychat=True)
+        st.session_state["active_view"] = _VIEW_LABELS[0]
+        st.session_state["_prev_active_view"] = st.session_state["active_view"]
+        _sync_view_query_param()
 
     if uploaded is not None:
         file_id = (uploaded.name, uploaded.size)
@@ -790,182 +833,210 @@ with st.sidebar:
 
     if raw_df_orig is not None:
         st.divider()
-        st.subheader("Column Selection")
+        st.subheader("Column and Cleaning Setup")
+        st.caption("Batch changes below, then click `Apply setup`.")
 
-        # Auto-suggest on the *original* (possibly long) DataFrame
         date_suggestions = suggest_date_columns(raw_df_orig)
-
         all_cols = list(raw_df_orig.columns)
-        default_date_idx = (
-            all_cols.index(date_suggestions[0]) if date_suggestions else 0
-        )
+        default_date_idx = all_cols.index(date_suggestions[0]) if date_suggestions else 0
 
         if "sidebar_date_col" not in st.session_state:
             st.session_state["sidebar_date_col"] = all_cols[default_date_idx]
-        date_col = st.selectbox("Date column", all_cols, key="sidebar_date_col")
+        if "sidebar_dup_action" not in st.session_state:
+            st.session_state["sidebar_dup_action"] = "keep_last"
+        if "sidebar_missing_action" not in st.session_state:
+            st.session_state["sidebar_missing_action"] = "interpolate"
+        if "sidebar_freq_override" not in st.session_state:
+            st.session_state["sidebar_freq_override"] = ""
 
-        # ---- Auto-detect long vs wide format ---------------------------------
-        is_long, auto_group, auto_value = detect_long_format(raw_df_orig, date_col)
+        with st.form("sidebar_setup_form", border=False):
+            date_col = st.selectbox("Date column", all_cols, key="sidebar_date_col")
+            is_long, auto_group, auto_value = detect_long_format(raw_df_orig, date_col)
 
-        if "sidebar_data_format" not in st.session_state:
-            st.session_state["sidebar_data_format"] = "Long" if is_long else "Wide"
+            if "sidebar_data_format" not in st.session_state:
+                st.session_state["sidebar_data_format"] = "Long" if is_long else "Wide"
 
-        data_format = st.radio(
-            "Data format",
-            ["Wide", "Long"],
-            key="sidebar_data_format",
-            horizontal=True,
-        )
-
-        # When format radio changes, clear y_cols so the multiselect resets
-        if st.session_state.get("_prev_data_format") != data_format:
-            st.session_state.pop("sidebar_y_cols", None)
-            st.session_state["_prev_data_format"] = data_format
-
-        # ---- Build effective (wide) DataFrame --------------------------------
-        if data_format == "Long":
-            # Columns eligible for group (string/object) and value (numeric)
-            other_cols = [c for c in all_cols if c != date_col]
-            string_cols = [
-                c for c in other_cols
-                if raw_df_orig[c].dtype == object
-                or pd.api.types.is_string_dtype(raw_df_orig[c])
-            ]
-            numeric_cols = [
-                c for c in other_cols
-                if pd.api.types.is_numeric_dtype(raw_df_orig[c])
-            ]
-
-            if "sidebar_group_col" not in st.session_state:
-                st.session_state["sidebar_group_col"] = (
-                    auto_group if auto_group and auto_group in string_cols
-                    else (string_cols[0] if string_cols else None)
-                )
-            group_col = st.selectbox(
-                "Group column", string_cols, key="sidebar_group_col",
+            data_format = st.radio(
+                "Data format",
+                ["Wide", "Long"],
+                key="sidebar_data_format",
+                horizontal=True,
             )
 
-            value_options = [c for c in numeric_cols if c != group_col]
-            if "sidebar_value_col" not in st.session_state:
-                st.session_state["sidebar_value_col"] = (
-                    auto_value if auto_value and auto_value in value_options
-                    else (value_options[0] if value_options else None)
-                )
-            value_col_sel = st.selectbox(
-                "Value column", value_options, key="sidebar_value_col",
-            )
-
-            # Clear y_cols when group/value changes
-            pivot_key = (group_col, value_col_sel)
-            if st.session_state.get("_prev_pivot_key") != pivot_key:
+            if st.session_state.get("_prev_data_format") != data_format:
                 st.session_state.pop("sidebar_y_cols", None)
-                st.session_state["_prev_pivot_key"] = pivot_key
+                st.session_state["_prev_data_format"] = data_format
 
-            if group_col and value_col_sel:
-                effective_df = pivot_long_to_wide(
-                    raw_df_orig, date_col, group_col, value_col_sel,
-                )
-                n_groups = raw_df_orig[group_col].nunique()
-                st.caption(f"Pivoted **{n_groups}** groups from `{group_col}`")
-                available_y = [c for c in effective_df.columns if c != date_col]
+            group_col = None
+            value_col_sel = None
+            if data_format == "Long":
+                other_cols = [c for c in all_cols if c != date_col]
+                string_cols = [
+                    c for c in other_cols
+                    if raw_df_orig[c].dtype == object
+                    or pd.api.types.is_string_dtype(raw_df_orig[c])
+                ]
+                numeric_cols = [
+                    c for c in other_cols
+                    if pd.api.types.is_numeric_dtype(raw_df_orig[c])
+                ]
+
+                if string_cols:
+                    if "sidebar_group_col" not in st.session_state:
+                        st.session_state["sidebar_group_col"] = (
+                            auto_group if auto_group and auto_group in string_cols
+                            else string_cols[0]
+                        )
+                    group_col = st.selectbox("Group column", string_cols, key="sidebar_group_col")
+                else:
+                    st.warning("No categorical columns available for long-format grouping.")
+
+                value_options = [c for c in numeric_cols if c != group_col] if group_col else numeric_cols
+
+                if value_options:
+                    if "sidebar_value_col" not in st.session_state:
+                        st.session_state["sidebar_value_col"] = (
+                            auto_value if auto_value and auto_value in value_options
+                            else value_options[0]
+                        )
+                    value_col_sel = st.selectbox("Value column", value_options, key="sidebar_value_col")
+                else:
+                    st.warning("No numeric value column available for long-format pivoting.")
+
+                pivot_key = (group_col, value_col_sel)
+                if st.session_state.get("_prev_pivot_key") != pivot_key:
+                    st.session_state.pop("sidebar_y_cols", None)
+                    st.session_state["_prev_pivot_key"] = pivot_key
+
+                if group_col and value_col_sel:
+                    effective_df = pivot_long_to_wide(
+                        raw_df_orig, date_col, group_col, value_col_sel,
+                    )
+                    n_groups = raw_df_orig[group_col].nunique()
+                    st.caption(f"Pivot preview: **{n_groups}** groups from `{group_col}`")
+                    available_y = [c for c in effective_df.columns if c != date_col]
+                else:
+                    effective_df = raw_df_orig
+                    available_y = []
             else:
                 effective_df = raw_df_orig
-                available_y = []
-        else:
-            # Wide format — same as before
-            effective_df = raw_df_orig
-            numeric_suggestions = suggest_numeric_columns(raw_df_orig)
-            available_y = [c for c in numeric_suggestions if c != date_col]
+                numeric_suggestions = suggest_numeric_columns(raw_df_orig)
+                available_y = [c for c in numeric_suggestions if c != date_col]
 
-        # ---- Y-columns multiselect (shared by both paths) --------------------
-        # Filter any stale stored y_cols against current available options
-        if "sidebar_y_cols" in st.session_state:
-            st.session_state["sidebar_y_cols"] = [
-                c for c in st.session_state["sidebar_y_cols"]
-                if c in available_y
-            ]
-        if "sidebar_y_cols" not in st.session_state:
-            st.session_state["sidebar_y_cols"] = (
-                available_y[:4] if available_y else []
+            if "sidebar_y_cols" in st.session_state:
+                st.session_state["sidebar_y_cols"] = [
+                    c for c in st.session_state["sidebar_y_cols"] if c in available_y
+                ]
+            if "sidebar_y_cols" not in st.session_state:
+                st.session_state["sidebar_y_cols"] = available_y[:4] if available_y else []
+            y_cols = st.multiselect("Value column(s)", available_y, key="sidebar_y_cols")
+
+            st.markdown("##### Cleaning Options")
+            dup_action = st.selectbox(
+                "Duplicate dates",
+                ["keep_last", "keep_first", "drop_all"],
+                key="sidebar_dup_action",
             )
-        y_cols = st.multiselect(
-            "Value column(s)", available_y, key="sidebar_y_cols",
-        )
-
-        # Push effective (wide) df into raw_df for the cleaning pipeline
-        st.session_state.raw_df = effective_df
-        raw_df = effective_df
-
-        st.session_state.date_col = date_col
-        st.session_state.y_cols = y_cols
-
-        st.divider()
-        st.subheader("Cleaning Options")
-        dup_action = st.selectbox(
-            "Duplicate dates",
-            ["keep_last", "keep_first", "drop_all"],
-            key="sidebar_dup_action",
-        )
-        missing_action = st.selectbox(
-            "Missing values",
-            ["interpolate", "ffill", "drop"],
-            key="sidebar_missing_action",
-        )
-
-        # Clean — only recompute and write session_state when inputs change
-        if y_cols:
-            _key = (date_col, tuple(y_cols), dup_action, missing_action,
-                    st.session_state._upload_id)
-            if st.session_state.get("_clean_key") != _key:
-                cleaned_df, report, freq_info = _clean_pipeline(
-                    _df_hash(raw_df), raw_df, date_col, tuple(y_cols),
-                    dup_action, missing_action,
-                )
-                st.session_state.cleaned_df = cleaned_df
-                st.session_state.cleaning_report = report
-                st.session_state.freq_info = freq_info
-                st.session_state._clean_key = _key
-
-            cleaned_df = st.session_state.cleaned_df
-            freq_info = st.session_state.freq_info
-            st.caption(f"Frequency: **{freq_info.label}** "
-                       f"({'regular' if freq_info.is_regular else 'irregular'})")
-
-            # Frequency override
+            missing_action = st.selectbox(
+                "Missing values",
+                ["interpolate", "ffill", "drop"],
+                key="sidebar_missing_action",
+            )
             freq_override = st.text_input(
                 "Override frequency label (optional)",
                 help="e.g. Daily, Weekly, Monthly, Quarterly, Yearly",
                 key="sidebar_freq_override",
             )
-            if freq_override.strip():
-                st.session_state.freq_info = FrequencyInfo(
-                    label=freq_override.strip(),
-                    median_delta=freq_info.median_delta,
-                    is_regular=freq_info.is_regular,
-                )
-                freq_info = st.session_state.freq_info
+            apply_setup = st.form_submit_button("Apply setup", use_container_width=True)
 
-            # ------ QueryChat ------
+        if apply_setup:
+            st.session_state.raw_df = effective_df
+            st.session_state.date_col = date_col
+            st.session_state.y_cols = y_cols
+
+            settings_key = (
+                st.session_state._upload_id,
+                date_col,
+                data_format,
+                st.session_state.get("sidebar_group_col"),
+                st.session_state.get("sidebar_value_col"),
+                tuple(y_cols),
+                dup_action,
+                missing_action,
+                freq_override.strip(),
+            )
+            if st.session_state.get("_last_applied_settings_key") != settings_key:
+                _clear_analysis_state(reset_querychat=True)
+            st.session_state["_last_applied_settings_key"] = settings_key
+            st.session_state["setup_applied"] = True
+
+            if y_cols:
+                cleaned_df, report, freq_info = _clean_pipeline(
+                    _df_hash(effective_df), effective_df, date_col, tuple(y_cols),
+                    dup_action, missing_action,
+                )
+                if freq_override.strip():
+                    freq_info = FrequencyInfo(
+                        label=freq_override.strip(),
+                        median_delta=freq_info.median_delta,
+                        is_regular=freq_info.is_regular,
+                    )
+
+                st.session_state.cleaned_df = cleaned_df
+                st.session_state.cleaning_report = report
+                st.session_state.freq_info = freq_info
+                st.session_state._clean_key = (
+                    date_col, tuple(y_cols), dup_action, missing_action,
+                    st.session_state._upload_id,
+                )
+            else:
+                st.session_state.cleaned_df = None
+                st.session_state.cleaning_report = None
+                st.session_state.freq_info = None
+                st.session_state._clean_key = None
+                st.session_state.qc = None
+                st.session_state.qc_hash = None
+
+        if not st.session_state.get("setup_applied"):
+            st.info("Configure columns and cleaning options, then click `Apply setup`.")
+
+        if st.session_state.get("setup_applied") and st.session_state.get("y_cols"):
+            cleaned_df = st.session_state.cleaned_df
+            date_col = st.session_state.date_col
+            y_cols = st.session_state.y_cols
+            freq_info = st.session_state.freq_info
+
+            st.success("Setup applied. Continue in the main panel to choose an analysis view.")
+            if freq_info is not None:
+                st.caption(f"Frequency: **{freq_info.label}** "
+                           f"({'regular' if freq_info.is_regular else 'irregular'})")
+
             if check_querychat_available():
                 st.divider()
                 st.subheader("QueryChat")
-                if cleaned_df is not None:
-                    _querychat_fragment(cleaned_df, date_col, y_cols,
-                                         st.session_state.freq_info.label)
+                enable_qc = st.toggle(
+                    "Enable QueryChat filtering",
+                    key="enable_querychat",
+                    help="Use natural-language prompts to filter the dataset (e.g., 'last 5 years'); chart views then use the filtered data.",
+                )
+                if enable_qc and cleaned_df is not None and freq_info is not None:
+                    _querychat_fragment(cleaned_df, date_col, y_cols, freq_info.label)
+                else:
+                    st.session_state.qc = None
+                    st.session_state.qc_hash = None
             else:
                 st.divider()
                 st.info(
                     "Set `OPENAI_API_KEY` to enable QueryChat "
                     "(natural-language data filtering)."
                 )
-
-    st.divider()
-    st.caption(
-        "**Privacy:** All processing is in-memory. "
-        "If you click **Interpret Chart with AI**, the chart image is sent to OpenAI — "
-        "do not include sensitive data in your charts. "
-        "QueryChat protects your privacy by only passing metadata (not your data) to OpenAI."
-    )
+    # st.divider()
+    # st.caption(
+    #     "**Privacy:** All processing is in-memory. "
+    #     "If you click **Interpret Chart with AI**, the chart image is sent to OpenAI — "
+    #     "do not include sensitive data in your charts. "
+    #     "QueryChat protects your privacy by only passing metadata (not your data) to OpenAI."
+    # )
 
 # ---------------------------------------------------------------------------
 # Main area — guard
@@ -1072,16 +1143,19 @@ _data_quality_fragment(report)
 # ---------------------------------------------------------------------------
 if "active_view" not in st.session_state:
     st.session_state["active_view"] = _initial_view_label()
+if st.session_state.get("_prev_active_view") is None:
+    st.session_state["_prev_active_view"] = st.session_state["active_view"]
 
+st.subheader("Explore: Choose Analysis View")
+st.caption("Switching views resets chart controls and filtered data for a clean start.")
 view_col, reset_col = st.columns([6, 1])
 with view_col:
     active_view = st.radio(
-        "View",
+        "Analysis view",
         _VIEW_LABELS,
         key="active_view",
         horizontal=True,
-        label_visibility="collapsed",
-        on_change=_sync_view_query_param,
+        on_change=_on_view_change,
     )
 with reset_col:
     if st.button("Reset all", key="reset_main", use_container_width=True):
